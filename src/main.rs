@@ -9,12 +9,11 @@ use axum::{
 };
 use futures::{sink::SinkExt, stream::StreamExt};
 use std::{
-    collections::HashSet,
     net::SocketAddr,
     sync::{Arc, Mutex},
 };
-use tokio::sync::broadcast;
-use tracing::debug;
+use tokio::sync::broadcast::{self, Sender};
+use tracing::{debug, info, warn};
 
 // Our shared state
 struct AppState {
@@ -62,8 +61,20 @@ async fn websocket_handler(
     ws.on_upgrade(|socket| websocket(socket, state))
 }
 
-async fn websocket(mut stream: WebSocket, state: Arc<AppState>) {
-    if let Some(Ok(Message::Text(msg))) = stream.recv().await {
+fn execute_dude_msg(msg: String, broadcast_tx: &Sender<String>) {
+    let splitted: Vec<&str> = msg.trim().split(' ').collect();
+    if splitted.len() != 4 || splitted[0] != "search" {
+        warn!("Unknown message from dude: {}", msg)
+    } else {
+        info!("Request '{}' received from dude, broadcasting...", msg);
+        broadcast_tx.send(msg).expect("Broadcasting failed");
+    }
+}
+
+async fn websocket(stream: WebSocket, state: Arc<AppState>) {
+    let (mut tx, mut rx) = stream.split();
+
+    if let Some(Ok(Message::Text(msg))) = rx.next().await {
         if msg == "slave" {
             let slave_id = {
                 // On utilise ce bloc pour drop le mutex le plus tôt possible
@@ -73,11 +84,42 @@ async fn websocket(mut stream: WebSocket, state: Arc<AppState>) {
                 id // En Rust, faire cela permet de faire "retourner" une valeur à partir du bloc
             };
 
-            debug!("Slave connected with id = {}", slave_id);
+            info!("Slave connected with id = {}", slave_id);
 
-            while let Some(Ok(Message::Text(msg))) = stream.recv().await {
-                debug!("Slave says: {}", msg)
-            }
+            let mut broadcast_rx = state.broadcast_tx.subscribe();
+
+            let mut transfer_orders_task = tokio::spawn(async move {
+                while let Ok(msg) = broadcast_rx.recv().await {
+                    // arrêt de la boucle à la moindre erreur
+                    if tx.send(Message::Text(msg)).await.is_err() {
+                        break;
+                    }
+                }
+            });
+
+            let mut slave_listening_task = tokio::spawn(async move {
+                while let Some(Ok(msg)) = rx.next().await {
+                    if let Message::Text(msg) = msg {
+                        let splitted: Vec<&str> = msg.trim().split(' ').collect();
+                        if splitted.len() != 3 || splitted[0] != "found" {
+                            warn!("Unknown message from slave {}: {}", slave_id, msg)
+                        } else {
+                            info!(
+                                "Slave {} found the word {} behind the hash {}",
+                                slave_id, splitted[1], splitted[2]
+                            )
+                        }
+                    } else {
+                        warn!("Non textual message from slave {}: {:?}", slave_id, msg)
+                    }
+                }
+            });
+
+            // Si l'une des deux tâches s'arrêtent, plus la peine de continuer.
+            tokio::select! {
+                _ = (&mut transfer_orders_task) => slave_listening_task.abort(),
+                _ = (&mut slave_listening_task) => transfer_orders_task.abort(),
+            };
 
             state
                 .slaves_id_order
@@ -85,17 +127,17 @@ async fn websocket(mut stream: WebSocket, state: Arc<AppState>) {
                 .unwrap()
                 .retain(|&id| id != slave_id);
 
-            debug!("Slave {} disconnected", slave_id)
+            info!("Slave {} disconnected", slave_id)
         } else {
-            debug!("Dude connected");
-            debug!("Dude says: {}", msg);
-            while let Some(Ok(Message::Text(msg))) = stream.recv().await {
-                debug!("Dude says: {}", msg)
+            info!("Dude connected");
+            execute_dude_msg(msg, &state.broadcast_tx);
+            while let Some(Ok(Message::Text(msg))) = rx.next().await {
+                execute_dude_msg(msg, &state.broadcast_tx);
             }
-            debug!("Dude disconnected")
+            info!("Dude disconnected")
         }
     } else {
-        debug!("Error with unknown client");
+        warn!("Error with unknown client");
     }
     /*
         // By splitting we can send and receive at the same time.
