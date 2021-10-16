@@ -14,10 +14,11 @@ use std::{
     sync::{Arc, Mutex},
 };
 use tokio::sync::broadcast;
+use tracing::debug;
 
 // Our shared state
 struct AppState {
-    clients_id_order: Mutex<Vec<u32>>,
+    slaves_id_order: Mutex<Vec<u32>>,
     broadcast_tx: broadcast::Sender<String>,
 }
 
@@ -33,7 +34,7 @@ async fn main() {
     let (broadcast_tx, _) = broadcast::channel(100);
 
     let app_state = Arc::new(AppState {
-        clients_id_order,
+        slaves_id_order: clients_id_order,
         broadcast_tx,
     });
 
@@ -56,7 +57,7 @@ async fn websocket_handler(
     user_agent: Option<TypedHeader<headers::UserAgent>>,
 ) -> impl IntoResponse {
     if let Some(TypedHeader(user_agent)) = user_agent {
-        tracing::debug!("`{}` connected", user_agent.as_str());
+        debug!("`{}` connected", user_agent.as_str());
     }
     ws.on_upgrade(|socket| websocket(socket, state))
 }
@@ -64,27 +65,38 @@ async fn websocket_handler(
 async fn websocket(mut stream: WebSocket, state: Arc<AppState>) {
     if let Some(Ok(Message::Text(msg))) = stream.recv().await {
         if msg == "slave" {
-            let client_id = {
+            let slave_id = {
                 // On utilise ce bloc pour drop le mutex le plus tôt possible
-                let mut clients_id_order = state.clients_id_order.lock().unwrap();
-                let id = clients_id_order.iter().max().copied().unwrap_or(0) + 1;
-                clients_id_order.push(id);
+                let mut slaves_id_order = state.slaves_id_order.lock().unwrap();
+                let id = slaves_id_order.iter().max().copied().unwrap_or(0) + 1;
+                slaves_id_order.push(id);
                 id // En Rust, faire cela permet de faire "retourner" une valeur à partir du bloc
             };
 
-            tracing::debug!("Slave connected with id = {}", client_id);
+            debug!("Slave connected with id = {}", slave_id);
 
             while let Some(Ok(Message::Text(msg))) = stream.recv().await {
-                tracing::debug!("Client says: {}", msg)
+                debug!("Slave says: {}", msg)
             }
+
+            state
+                .slaves_id_order
+                .lock()
+                .unwrap()
+                .retain(|&id| id != slave_id);
+
+            debug!("Slave {} disconnected", slave_id)
+        } else {
+            debug!("Dude connected");
+            debug!("Dude says: {}", msg);
+            while let Some(Ok(Message::Text(msg))) = stream.recv().await {
+                debug!("Dude says: {}", msg)
+            }
+            debug!("Dude disconnected")
         }
     } else {
-        return;
+        debug!("Error with unknown client");
     }
-    while let Some(Ok(Message::Text(msg))) = stream.recv().await {
-        tracing::debug!("Client says: {}", msg)
-    }
-    tracing::debug!("Client disconnected")
     /*
         // By splitting we can send and receive at the same time.
         let (mut client_tx, mut client_rx) = stream.split();
