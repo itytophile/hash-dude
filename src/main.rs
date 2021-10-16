@@ -99,18 +99,19 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>) {
 
             let mut slave_listening_task = tokio::spawn(async move {
                 while let Some(Ok(msg)) = rx.next().await {
-                    if let Message::Text(msg) = msg {
-                        let splitted: Vec<&str> = msg.trim().split(' ').collect();
-                        if splitted.len() != 3 || splitted[0] != "found" {
-                            warn!("Unknown message from slave {}: {}", slave_id, msg)
-                        } else {
-                            info!(
-                                "Slave {} found the word {} behind the hash {}",
-                                slave_id, splitted[1], splitted[2]
-                            )
+                    match msg {
+                        Message::Text(msg) => {
+                            let splitted: Vec<&str> = msg.trim().split(' ').collect();
+                            if splitted.len() != 3 || splitted[0] != "found" {
+                                warn!("Unknown message from slave {}: {}", slave_id, msg)
+                            } else {
+                                info!(
+                                    "Slave {} found the word {} behind the hash {}",
+                                    slave_id, splitted[2], splitted[1]
+                                )
+                            }
                         }
-                    } else {
-                        warn!("Non textual message from slave {}: {:?}", slave_id, msg)
+                        _ => warn!("Non textual message from slave {}: {:?}", slave_id, msg),
                     }
                 }
             });
@@ -131,81 +132,26 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>) {
         } else {
             info!("Dude connected");
             execute_dude_msg(msg, &state.broadcast_tx);
-            while let Some(Ok(Message::Text(msg))) = rx.next().await {
-                execute_dude_msg(msg, &state.broadcast_tx);
+
+            while let Some(Ok(msg)) = rx.next().await {
+                match msg {
+                    // On est poli, on pong quand on a un ping
+                    Message::Ping(payload) => {
+                        debug!("Ping received from dude");
+                        if tx.send(Message::Pong(payload)).await.is_err() {
+                            break;
+                        }
+                    }
+                    Message::Text(msg) => execute_dude_msg(msg, &state.broadcast_tx),
+                    _ => break,
+                }
             }
+
             info!("Dude disconnected")
         }
     } else {
         warn!("Error with unknown client");
     }
-    /*
-        // By splitting we can send and receive at the same time.
-        let (mut client_tx, mut client_rx) = stream.split();
-
-        // Username gets set in the receive loop, if its valid
-        let mut username = String::new();
-
-        // Loop until a text message is found.
-        if let Some(Ok(Message::Text(name))) = client_rx.next().await {
-            // If username that is sent by client is not taken, fill username string.
-            add_username_if_new(&state, &mut username, &name);
-
-            // If not empty we want to quit the loop else we want to quit function.
-            if username.is_empty() {
-                // Only send our client that username is taken.
-                let _ = client_tx
-                    .send(Message::Text(String::from("Username already taken.")))
-                    .await;
-
-                return;
-            }
-        } else {
-            return;
-        }
-
-        // Subscribe before sending joined message.
-        let mut broadcast_rx = state.broadcast_tx.subscribe();
-
-        // Send joined message to all subscribers.
-        let msg = format!("{} joined.", username);
-        let _ = state.broadcast_tx.send(msg);
-
-        // This task will receive broadcast messages and send text message to our client.
-        let mut send_task = tokio::spawn(async move {
-            while let Ok(msg) = broadcast_rx.recv().await {
-                // In any websocket error, break loop.
-                if client_tx.send(Message::Text(msg)).await.is_err() {
-                    break;
-                }
-            }
-        });
-
-        // Clone things we want to pass to the receiving task.
-        let tx = state.broadcast_tx.clone();
-        let name = username.clone();
-
-        // This task will receive messages from client and send them to broadcast subscribers.
-        let mut recv_task = tokio::spawn(async move {
-            while let Some(Ok(Message::Text(text))) = client_rx.next().await {
-                // Add username before message.
-                let _ = tx.send(format!("{}: {}", name, text));
-            }
-        });
-
-        // If any one of the tasks exit, abort the other.
-        tokio::select! {
-            _ = (&mut send_task) => recv_task.abort(),
-            _ = (&mut recv_task) => send_task.abort(),
-        };
-
-        // Send user left message.
-        let msg = format!("{} left.", username);
-        let _ = state.broadcast_tx.send(msg);
-
-        // Remove username from map so new clients can take it.
-        state.user_set.lock().unwrap().remove(&username);
-    }*/
 }
 
 // Include utf-8 file at **compile** time.
