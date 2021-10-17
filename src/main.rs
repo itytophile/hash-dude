@@ -24,7 +24,7 @@ struct AppState {
 #[tokio::main]
 async fn main() {
     if std::env::var_os("RUST_LOG").is_none() {
-        std::env::set_var("RUST_LOG", "hash_dude=debug")
+        std::env::set_var("RUST_LOG", "server=debug")
     }
 
     tracing_subscriber::fmt::init();
@@ -123,6 +123,9 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>) {
                                 }
                                 _ => warn!("Unknown request from slave {}: {}", slave_id, msg),
                             }
+                        }
+                        Message::Ping(_) => {
+                            warn!("Slave {} pinged but pong not implemented", slave_id)
                         }
                         _ => warn!("Non textual message from slave {}: {:?}", slave_id, msg),
                     }
