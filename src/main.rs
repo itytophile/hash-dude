@@ -159,7 +159,7 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>) {
                         }
                     }
                     Message::Text(msg) => execute_dude_msg(msg, &state.broadcast_tx),
-                    _ => break,
+                    _ => warn!("Non textual message from dude: {:?}", msg),
                 }
             }
 
