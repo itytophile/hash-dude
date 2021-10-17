@@ -62,12 +62,24 @@ async fn websocket_handler(
 }
 
 fn execute_dude_msg(msg: String, broadcast_tx: &Sender<String>) {
-    let splitted: Vec<&str> = msg.trim().split(' ').collect();
-    if splitted.len() != 4 || splitted[0] != "search" {
-        warn!("Unknown message from dude: {}", msg)
-    } else {
-        info!("Request '{}' received from dude, broadcasting...", msg);
-        broadcast_tx.send(msg).expect("Broadcasting failed");
+    let splitted: Vec<&str> = msg.split(' ').collect();
+    match splitted.as_slice() {
+        ["search", hash, begin, end] => {
+            info!(
+                "Dude wants to crack {} in range [{}; {}), broadcasting...",
+                hash, begin, end
+            );
+            broadcast_tx.send(msg).expect("Broadcasting failed");
+        }
+        ["stop"] => {
+            info!("Dude wants to stop, broadcasting...");
+            broadcast_tx.send(msg).expect("Broadcasting failed");
+        }
+        ["exit"] => {
+            info!("Dude wants to exit, broadcasting...");
+            broadcast_tx.send(msg).expect("Broadcasting failed");
+        }
+        _ => warn!("Unknown request from dude: {}", msg),
     }
 }
 
@@ -101,14 +113,15 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>) {
                 while let Some(Ok(msg)) = rx.next().await {
                     match msg {
                         Message::Text(msg) => {
-                            let splitted: Vec<&str> = msg.trim().split(' ').collect();
-                            if splitted.len() != 3 || splitted[0] != "found" {
-                                warn!("Unknown message from slave {}: {}", slave_id, msg)
-                            } else {
-                                info!(
-                                    "Slave {} found the word {} behind the hash {}",
-                                    slave_id, splitted[2], splitted[1]
-                                )
+                            let splitted: Vec<&str> = msg.split(' ').collect();
+                            match splitted.as_slice() {
+                                ["found", hash, word] => {
+                                    info!(
+                                        "Slave {} found the word {} behind the hash {}",
+                                        slave_id, word, hash
+                                    )
+                                }
+                                _ => warn!("Unknown request from slave {}: {}", slave_id, msg),
                             }
                         }
                         _ => warn!("Non textual message from slave {}: {:?}", slave_id, msg),
