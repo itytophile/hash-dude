@@ -27,8 +27,14 @@ fn get_number_from_word(word: &str) -> Option<usize> {
     let mut num = 0;
     for (index, c) in word.chars().rev().enumerate() {
         let letter_index = ALPHABET.iter().position(|&a| a == c)?;
+        let addition = (letter_index + 1) * 62_u64.pow(index as u32) as usize;
 
-        num += (letter_index + 1) * 62_u64.pow(index as u32) as usize;
+        // Pour éviter l'overflow
+        if num > usize::MAX - addition {
+            return None;
+        }
+
+        num += addition;
     }
     Some(num - 1)
 }
