@@ -24,3 +24,7 @@ tokio-tungstenite = "0.15"
 url = "2"
 futures-util = "0.3"
 md-5 = "0.9"
+hex = "0.4"
+
+[profile.release]
+lto = true
