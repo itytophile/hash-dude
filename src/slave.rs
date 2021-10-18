@@ -8,36 +8,10 @@ use tokio_tungstenite::{
 };
 use tracing::{debug, error, info, warn};
 
+// Le type du transmetteur qui envoie des messages au master
+// je ne l'ai pas déterminé moi-même, pour rassurer le lecteur:
+// j'ai juste copié collé la valeur de sortie de ws_stream.split()
 type WebSocketSender = SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>;
-
-// algo trouvé par chance
-fn get_word_from_number(mut num: usize) -> String {
-    let mut word = String::new();
-    loop {
-        word.insert(0, ALPHABET[num % BASE]);
-        num /= BASE;
-        if num == 0 {
-            break word;
-        }
-        num -= 1; // la petite douille de la chance
-    }
-}
-// algo trouvé aussi par chance
-fn get_number_from_word(word: &str) -> Option<usize> {
-    let mut num = 0;
-    for (index, c) in word.chars().rev().enumerate() {
-        let letter_index = ALPHABET.iter().position(|&a| a == c)?;
-        let addition = (letter_index + 1) * 62_u64.pow(index as u32) as usize;
-
-        // Pour éviter l'overflow
-        if num > usize::MAX - addition {
-            return None;
-        }
-
-        num += addition;
-    }
-    Some(num - 1)
-}
 
 #[tokio::main]
 async fn main() {
@@ -85,54 +59,67 @@ async fn main() {
                     &["search", hash_to_crack, begin, end] => {
                         info!("Search request from master");
 
-                        match hex::decode(hash_to_crack) {
-                            Ok(hash_hex_bytes) => {
-                                if let (Some(begin_num), Some(end_num)) =
-                                    (get_number_from_word(begin), get_number_from_word(end))
-                                {
-                                    if begin_num >= end_num {
-                                        warn!("Can't search in range [{};{}), sorry", begin, end);
-                                        continue;
-                                    }
-                                    debug!(
-                                        "{} word(s) in range [{};{})",
-                                        end_num - begin_num,
-                                        begin,
-                                        end
-                                    );
-
-                                    let tx_to_master = match tx_or_task {
-                                        Tx(tx) => tx,
-                                        Task(task) => {
-                                            info!("Recovering from previous search (stop if still running)...");
-                                            tx_stop_search.send(true).unwrap();
-                                            task.await.unwrap()
-                                        }
-                                    };
-
-                                    info!(
-                                        "Now cracking {} in range [{}; {})...",
-                                        hash_to_crack, begin, end
-                                    );
-
-                                    // On met le Stop à false avant chaque lancée
-                                    tx_stop_search.send(false).unwrap();
-
-                                    tx_or_task = Task(tokio::spawn(crack_hash(
-                                        begin_num..end_num,
-                                        hash_hex_bytes,
-                                        hash_to_crack.to_owned(),
-                                        tx_to_master,
-                                        rx_stop_search.clone(),
-                                    )));
-                                } else {
-                                    warn!(
-                                        "Unsupported letter(s) in provided range, search aborted"
-                                    );
-                                }
+                        let hash_hex_bytes = match hex::decode(hash_to_crack) {
+                            Ok(bytes) => bytes,
+                            Err(err) => {
+                                warn!("Problem with hash: {}", err);
+                                continue;
                             }
-                            Err(err) => warn!("Problem with hash: {}", err),
+                        };
+
+                        let (begin_num, end_num) =
+                            match (get_number_from_word(begin), get_number_from_word(end)) {
+                                (Ok(begin_num), Ok(end_num)) => (begin_num, end_num),
+                                (Ok(_), Err(err)) => {
+                                    warn!("Problem with end word: {}", err);
+                                    continue;
+                                }
+                                (Err(err), Ok(_)) => {
+                                    warn!("Problem with begin word: {}", err);
+                                    continue;
+                                }
+                                (Err(err0), Err(err1)) => {
+                                    warn!("Problem with both words: {};{}", err0, err1);
+                                    continue;
+                                }
+                            };
+
+                        if begin_num >= end_num {
+                            warn!("Begin word greater or equal than end word, no need to continue");
+                            continue;
                         }
+
+                        debug!(
+                            "{} word(s) in range [{};{})",
+                            end_num - begin_num,
+                            begin,
+                            end
+                        );
+
+                        let tx_to_master = match tx_or_task {
+                            Tx(tx) => tx,
+                            Task(task) => {
+                                info!("Recovering from previous search (stop if still running)...");
+                                tx_stop_search.send(true).unwrap();
+                                task.await.unwrap()
+                            }
+                        };
+
+                        info!(
+                            "Now cracking {} in range [{}; {})...",
+                            hash_to_crack, begin, end
+                        );
+
+                        // On met le Stop à false avant chaque lancée
+                        tx_stop_search.send(false).unwrap();
+
+                        tx_or_task = Task(tokio::spawn(crack_hash(
+                            begin_num..end_num,
+                            hash_hex_bytes,
+                            hash_to_crack.to_owned(),
+                            tx_to_master,
+                            rx_stop_search.clone(),
+                        )));
                     }
                     ["stop"] => {
                         tx_or_task = match tx_or_task {
@@ -192,6 +179,40 @@ async fn crack_hash(
 
     warn!("No corresponding hash was found in the provided range");
     tx
+}
+
+// algo trouvé par chance
+fn get_word_from_number(mut num: usize) -> String {
+    let mut word = String::new();
+    loop {
+        word.insert(0, ALPHABET[num % BASE]);
+        num /= BASE;
+        if num == 0 {
+            break word;
+        }
+        num -= 1; // la petite douille de la chance
+    }
+}
+// algo trouvé aussi par chance
+fn get_number_from_word(word: &str) -> Result<usize, &'static str> {
+    let mut num = 0;
+    for (index, c) in word.chars().rev().enumerate() {
+        let letter_index = match ALPHABET.iter().position(|&a| a == c) {
+            Some(index) => index,
+            None => return Err("Unsupported letter in word"),
+        };
+        let addition = (letter_index + 1) * 62_u64.pow(index as u32) as usize;
+
+        // Pour éviter l'overflow
+        if num > usize::MAX - addition {
+            return Err(
+                "The word value is overflowing the usize capacity, use a smaller word please",
+            );
+        }
+
+        num += addition;
+    }
+    Ok(num - 1)
 }
 
 const BASE: usize = 62;
