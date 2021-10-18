@@ -1,11 +1,14 @@
-use std::env;
-
-use futures::SinkExt;
+use futures::{stream::SplitSink, SinkExt};
 use futures_util::StreamExt;
 use md5::{Digest, Md5};
-use tokio::{sync::mpsc, task::JoinHandle};
-use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
+use std::{env, ops::Range};
+use tokio::{net::TcpStream, sync::watch, task::JoinHandle};
+use tokio_tungstenite::{
+    connect_async, tungstenite::protocol::Message, MaybeTlsStream, WebSocketStream,
+};
 use tracing::{debug, error, info, warn};
+
+type WebSocketSender = SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>;
 
 // algo trouvé par chance
 fn get_word_from_number(mut num: usize) -> String {
@@ -45,14 +48,10 @@ async fn main() {
 
     let (ws_stream, _) = connect_async(url).await.expect("Failed to connect");
 
-    let (mut tx, mut rx) = ws_stream.split();
+    let (mut tx_to_master, mut rx) = ws_stream.split();
 
-    // Permet d'envoyer des messages au master dans plusieurs threads
-    // il y a peut-être moyen de s'en passer en jouant correctement
-    // avec l'ownership du tx
-    let (mpsc_websocket_tx, mut mpsc_rx) = mpsc::channel::<Message>(100);
-
-    tx.send(Message::Text("slave".to_owned()))
+    tx_to_master
+        .send(Message::Text("slave".to_owned()))
         .await
         .unwrap_or_else(|err| {
             error!("Can't connect to master at {}: {}", &connect_addr, err);
@@ -61,116 +60,132 @@ async fn main() {
 
     info!("Successfully connected to master at {}", &connect_addr);
 
-    let mut write_listening_task = tokio::spawn(async move {
-        while let Some(msg) = mpsc_rx.recv().await {
-            if tx.send(msg).await.is_err() {
-                break;
-            }
-        }
-    });
+    let (tx_stop_search, rx_stop_search) = watch::channel(false);
+    // Le but du jeu sera d'échanger l'ownership de ce tx avec la tâche de recherche
+    // et le main thread. On va refiler le tx à la tâche puis récupérer l'ownership
+    // au retour de la tâche asynchrone. Comme l'illustre l'enum ci dessous,
+    // soit on a l'handle de la tâche, soit on a le tx.
+    enum TxOrTask {
+        Tx(WebSocketSender),
+        Task(JoinHandle<WebSocketSender>),
+    }
+    use TxOrTask::*;
+    let mut tx_or_task = Tx(tx_to_master);
+    while let Some(Ok(msg)) = rx.next().await {
+        match msg {
+            Message::Text(msg) => {
+                let splitted: Vec<&str> = msg.split(' ').collect();
+                match splitted.as_slice() {
+                    &["search", hash_to_crack, begin, end] => {
+                        info!("Search request from master");
 
-    let mut master_listening_task = tokio::spawn(async move {
-        let mut cracking_task: Option<JoinHandle<()>> = None;
-        while let Some(Ok(msg)) = rx.next().await {
-            match msg {
-                Message::Text(msg) => {
-                    let splitted: Vec<&str> = msg.split(' ').collect();
-                    match splitted.as_slice() {
-                        &["search", hash_to_crack, begin, end] => {
-                            info!("Search request from master");
-                            if let Some(task) = cracking_task.as_ref() {
-                                info!("Stopping previous search...");
-                                task.abort();
-                            }
-                            info!(
-                                "Now cracking {} in range [{}; {})...",
-                                hash_to_crack, begin, end
-                            );
-
-                            match hex::decode(hash_to_crack) {
-                                Ok(hash_hex_bytes) => {
-                                    if let (Some(begin_num), Some(end_num)) =
-                                        (get_number_from_word(begin), get_number_from_word(end))
-                                    {
-                                        if begin_num >= end_num {
-                                            warn!(
-                                                "Can't search in range [{};{}), sorry",
-                                                begin, end
-                                            );
-                                            continue;
-                                        }
-                                        debug!(
-                                            "{} word(s) in range [{};{})",
-                                            end_num - begin_num,
-                                            begin,
-                                            end
-                                        );
-                                        // On clone à chaque fois pour éviter les problèmes d'ownership
-                                        let mpsc_websocket_tx = mpsc_websocket_tx.clone();
-                                        // On own tout ça sinon au prochain tour de boucle on va les perdre
-                                        let hash_to_crack = hash_to_crack.to_owned();
-                                        cracking_task = Some(tokio::spawn(async move {
-                                            let mut hasher = Md5::new();
-                                            for word in
-                                                (begin_num..end_num).map(get_word_from_number)
-                                            {
-                                                hasher.update(&word);
-                                                let hash = hasher.finalize_reset();
-                                                if hash.as_slice() == hash_hex_bytes {
-                                                    info!(
-                                                            "{} cracked! The word behind it is {}. Notifying master...",
-                                                            hash_to_crack, word
-                                                        );
-                                                    mpsc_websocket_tx
-                                                        .send(Message::Text(format!(
-                                                            "found {} {}",
-                                                            hash_to_crack, word
-                                                        )))
-                                                        .await
-                                                        .unwrap_or_else(|err| {
-                                                            error!(
-                                                                "Can't send message via mpsc_websocket_tx: {}",
-                                                                err
-                                                            );
-                                                        });
-                                                    return;
-                                                }
-                                            }
-                                            warn!("No corresponding hash was found in the provided range")
-                                        }));
-                                    } else {
-                                        warn!("Unsupported letter(s) in provided range, search aborted");
+                        match hex::decode(hash_to_crack) {
+                            Ok(hash_hex_bytes) => {
+                                if let (Some(begin_num), Some(end_num)) =
+                                    (get_number_from_word(begin), get_number_from_word(end))
+                                {
+                                    if begin_num >= end_num {
+                                        warn!("Can't search in range [{};{}), sorry", begin, end);
+                                        continue;
                                     }
-                                }
-                                Err(err) => warn!("Problem with hash: {}", err),
-                            }
-                        }
-                        ["stop"] => {
-                            if let Some(task) = cracking_task.as_ref() {
-                                info!("Stop request from master, aborting...");
-                                task.abort();
-                                cracking_task = None;
-                                info!("Search aborted")
-                            } else {
-                                info!("No search to stop")
-                            }
-                        }
-                        ["exit"] => {
-                            info!("Exit request from master, exiting...");
-                            break;
-                        }
-                        _ => warn!("Unknown request from master: {}", msg),
-                    }
-                }
-                _ => warn!("Non textual message from master: {:?}", msg),
-            }
-        }
-    });
+                                    debug!(
+                                        "{} word(s) in range [{};{})",
+                                        end_num - begin_num,
+                                        begin,
+                                        end
+                                    );
 
-    tokio::select! {
-        _ = (&mut write_listening_task) => master_listening_task.abort(),
-        _ = (&mut master_listening_task) => write_listening_task.abort(),
-    };
+                                    let tx_to_master = match tx_or_task {
+                                        Tx(tx) => tx,
+                                        Task(task) => {
+                                            info!("Recovering from previous search (stop if still running)...");
+                                            tx_stop_search.send(true).unwrap();
+                                            task.await.unwrap()
+                                        }
+                                    };
+
+                                    info!(
+                                        "Now cracking {} in range [{}; {})...",
+                                        hash_to_crack, begin, end
+                                    );
+
+                                    // On met le Stop à false avant chaque lancée
+                                    tx_stop_search.send(false).unwrap();
+
+                                    tx_or_task = Task(tokio::spawn(crack_hash(
+                                        begin_num..end_num,
+                                        hash_hex_bytes,
+                                        hash_to_crack.to_owned(),
+                                        tx_to_master,
+                                        rx_stop_search.clone(),
+                                    )));
+                                } else {
+                                    warn!(
+                                        "Unsupported letter(s) in provided range, search aborted"
+                                    );
+                                }
+                            }
+                            Err(err) => warn!("Problem with hash: {}", err),
+                        }
+                    }
+                    ["stop"] => {
+                        tx_or_task = match tx_or_task {
+                            Tx(tx) => {
+                                info!("No search task to stop");
+                                Tx(tx)
+                            }
+                            Task(task) => {
+                                info!("Stop request from master, aborting...");
+                                tx_stop_search.send(true).unwrap();
+                                let tx = task.await.unwrap();
+                                info!("Aborted");
+                                Tx(tx)
+                            }
+                        };
+                    }
+                    ["exit"] => {
+                        info!("Exit request from master, exiting...");
+                        tx_stop_search.send(true).unwrap();
+                        break;
+                    }
+                    _ => warn!("Unknown request from master: {}", msg),
+                }
+            }
+            _ => warn!("Non textual message from master: {:?}", msg),
+        }
+    }
+}
+
+async fn crack_hash(
+    range: Range<usize>,
+    hash_hex_bytes: Vec<u8>,
+    hash_to_crack: String,
+    mut tx: WebSocketSender,
+    rx_stop_search: watch::Receiver<bool>,
+) -> WebSocketSender {
+    let mut hasher = Md5::new();
+    for word in range.map(get_word_from_number) {
+        if *rx_stop_search.borrow() {
+            return tx;
+        }
+        hasher.update(&word);
+        let hash = hasher.finalize_reset();
+        if hash.as_slice() == hash_hex_bytes {
+            info!(
+                "{} cracked! The word behind it is {}. Notifying master...",
+                hash_to_crack, word
+            );
+            tx.send(Message::Text(format!("found {} {}", hash_to_crack, word)))
+                .await
+                .unwrap_or_else(|err| {
+                    error!("Can't send message via mpsc_websocket_tx: {}", err);
+                });
+            return tx;
+        }
+    }
+
+    warn!("No corresponding hash was found in the provided range");
+    tx
 }
 
 const BASE: usize = 62;
