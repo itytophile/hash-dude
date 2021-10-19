@@ -125,7 +125,7 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>) {
                             }
                         }
                         Message::Ping(_) => {
-                            warn!("Slave {} pinged but pong not implemented", slave_id)
+                            warn!("Slave {} ping'd but pong not implemented", slave_id)
                         }
                         _ => warn!("Non textual message from slave {}: {:?}", slave_id, msg),
                     }

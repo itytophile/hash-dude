@@ -5,6 +5,10 @@ edition = "2018"
 default-run = "server"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[lib]
+name = "alphabet"
+path = "src/alphabet.rs"
+
 [[bin]]
 name = "slave"
 path = "src/slave.rs"
