@@ -178,7 +178,6 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>) {
                                 };
                             let slave_end =
                                 slave_begin + gap + if slave_pos < remainder { 1 } else { 0 };
-                            println!("[{}, {})", slave_begin, slave_end);
                             format!(
                                 "search {} {} {}",
                                 hash,
@@ -196,6 +195,8 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>) {
                 }
             });
 
+            let broadcast_tx = state.broadcast_tx.clone();
+
             let mut slave_listening_task = tokio::spawn(async move {
                 while let Some(Ok(msg)) = rx.next().await {
                     match msg {
@@ -204,9 +205,12 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>) {
                             match splitted.as_slice() {
                                 ["found", hash, word] => {
                                     info!(
-                                        "Slave {} found the word {} behind the hash {}",
+                                        "Slave {} found the word {} behind the hash {}. Now stopping all slaves...",
                                         slave_id, word, hash
-                                    )
+                                    );
+                                    if let Err(err) = broadcast_tx.send(CustomMessage::Stop) {
+                                        warn!("Can't broadcast: {}", err)
+                                    }
                                 }
                                 _ => warn!("Unknown request from slave {}: {}", slave_id, msg),
                             }
