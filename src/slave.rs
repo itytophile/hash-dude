@@ -178,6 +178,6 @@ async fn crack_hash(
         }
     }
 
-    warn!("No corresponding hash was found in the provided range");
+    warn!("No corresponding hash has been found in the provided range");
     tx
 }

@@ -10,6 +10,7 @@ pub fn get_word_from_number(mut num: usize) -> String {
         num -= 1; // la petite douille de la chance
     }
 }
+
 // algo trouvé aussi par chance
 pub fn get_number_from_word(word: &str) -> Result<usize, &'static str> {
     let mut num = 0;
@@ -31,7 +32,9 @@ pub fn get_number_from_word(word: &str) -> Result<usize, &'static str> {
     }
     Ok(num - 1)
 }
+
 const BASE: usize = 62;
+
 const ALPHABET: [char; BASE] = [
     'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's',
     't', 'u', 'v', 'w', 'x', 'y', 'z', 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L',
