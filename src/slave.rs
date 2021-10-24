@@ -16,8 +16,8 @@ type WebSocketSender = SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Mes
 
 #[tokio::main]
 async fn main() {
-    if std::env::var_os("RUST_LOG").is_none() {
-        std::env::set_var("RUST_LOG", "slave=debug")
+    if env::var_os("RUST_LOG").is_none() {
+        env::set_var("RUST_LOG", "slave=debug")
     }
 
     tracing_subscriber::fmt::init();

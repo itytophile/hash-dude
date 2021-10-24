@@ -38,6 +38,12 @@ async fn main() {
 
     tracing_subscriber::fmt::init();
 
+    let addr: SocketAddr = std::env::args()
+        .nth(1)
+        .expect("This program needs an address (like 127.0.0.1:3000) as first argument!")
+        .parse()
+        .expect("Can't parse provided address");
+
     let clients_id_order = Mutex::new(Vec::new());
     let (broadcast_tx, _) = broadcast::channel(100);
 
@@ -51,7 +57,6 @@ async fn main() {
         .route("/ws", get(websocket_handler))
         .layer(AddExtensionLayer::new(app_state));
 
-    let addr = SocketAddr::from(([172, 17, 0, 1], 3000));
     tracing::info!("Listening on {}", addr);
     axum::Server::bind(&addr)
         .serve(app.into_make_service())
