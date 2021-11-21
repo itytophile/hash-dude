@@ -4,8 +4,8 @@ use axum::{
         ws::{Message, WebSocket, WebSocketUpgrade},
         Extension, TypedHeader,
     },
-    handler::get,
     response::{Html, IntoResponse},
+    routing::get,
     AddExtensionLayer, Router,
 };
 use futures::{sink::SinkExt, stream::StreamExt};
