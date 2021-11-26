@@ -1,0 +1,25 @@
+version: "3.9"
+services:
+    master:
+        image: 127.0.0.1:5000/master
+        build:
+            dockerfile: Dockerfile.server
+        volumes:
+            - "/var/run/docker.sock:/var/run/docker.sock"
+        ports:
+            - "8080:8080"
+        deploy:
+            # Vu que l'on partage le socket docker et que le service peut aller
+            # sur n'importe quel node (=pc) alors on doit contraindre le
+            # service master pour être toujours sur le même node
+            placement:
+                constraints: [ node.role == manager ]
+    slave:
+        image: 127.0.0.1:5000/slave
+        build:
+            dockerfile: Dockerfile.slave
+        command: "ws://master:8080"
+        depends_on:
+            - master
+        deploy:
+            replicas: 2
