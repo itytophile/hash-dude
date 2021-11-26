@@ -1,4 +1,4 @@
-from rust:alpine AS builder
+FROM rust:alpine AS builder
 
 RUN apk update
 RUN apk add clang musl-dev
