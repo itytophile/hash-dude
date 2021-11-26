@@ -175,7 +175,8 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>) {
                             let remainder = (end - begin) % slaves_count;
                             // On va tout décaler pour distribuer équitablement le reste
                             // donc 1 chacun pour les concernés (slave_pos < remainder)
-                            let slave_begin = gap * slave_pos
+                            let slave_begin = begin
+                                + gap * slave_pos
                                 + if slave_pos < remainder {
                                     slave_pos
                                 } else {
