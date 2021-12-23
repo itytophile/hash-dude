@@ -15,7 +15,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 use tokio::sync::broadcast::{self, error::SendError, Sender};
-use tracing::{debug, info, warn};
+use tracing::{debug, info, warn, Level};
 
 // Our shared state
 struct AppState {
@@ -33,10 +33,12 @@ enum CustomMessage {
 #[tokio::main]
 async fn main() {
     if std::env::var_os("RUST_LOG").is_none() {
-        std::env::set_var("RUST_LOG", "server=debug")
+        tracing_subscriber::fmt()
+            .with_max_level(Level::DEBUG)
+            .init();
+    } else {
+        tracing_subscriber::fmt::init();
     }
-
-    tracing_subscriber::fmt::init();
 
     let addr: SocketAddr = std::env::args()
         .nth(1)

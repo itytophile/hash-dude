@@ -7,7 +7,7 @@ use tokio::{net::TcpStream, sync::watch, task::JoinHandle};
 use tokio_tungstenite::{
     connect_async, tungstenite::protocol::Message, MaybeTlsStream, WebSocketStream,
 };
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, warn, Level};
 
 // Le type du transmetteur qui envoie des messages au master
 // je ne l'ai pas déterminé moi-même, pour rassurer le lecteur:
@@ -16,11 +16,14 @@ type WebSocketSender = SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Mes
 
 #[tokio::main]
 async fn main() {
-    if env::var_os("RUST_LOG").is_none() {
-        env::set_var("RUST_LOG", "slave=debug")
+    if std::env::var_os("RUST_LOG").is_none() {
+        tracing_subscriber::fmt()
+            .with_max_level(Level::DEBUG)
+            .init();
+    } else {
+        tracing_subscriber::fmt::init();
     }
 
-    tracing_subscriber::fmt::init();
     let connect_addr = env::args()
         .nth(1)
         .expect("This program needs a WebSocket URL as first argument!");
