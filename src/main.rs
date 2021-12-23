@@ -91,8 +91,8 @@ fn execute_dude_msg(
     msg: String,
     broadcast_tx: &Sender<CustomMessage>,
 ) -> Result<(), ExecuteMsgError> {
-    let splitted: Vec<&str> = msg.split(' ').collect();
-    match splitted.as_slice() {
+    let split: Vec<&str> = msg.split(' ').collect();
+    match split.as_slice() {
         &["search", hash, begin, end] => {
             info!(
                 "Dude wants to crack {} in range [{}; {}), broadcasting...",
@@ -207,8 +207,8 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>) {
                 while let Some(Ok(msg)) = rx.next().await {
                     match msg {
                         Message::Text(msg) => {
-                            let splitted: Vec<&str> = msg.split(' ').collect();
-                            match splitted.as_slice() {
+                            let split: Vec<&str> = msg.split(' ').collect();
+                            match split.as_slice() {
                                 ["found", hash, word] => {
                                     info!(
                                         "Slave {} found the word {} behind the hash {}. Now stopping all slaves...",

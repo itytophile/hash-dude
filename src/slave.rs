@@ -55,8 +55,8 @@ async fn main() {
     while let Some(Ok(msg)) = rx.next().await {
         match msg {
             Message::Text(msg) => {
-                let splitted: Vec<&str> = msg.split(' ').collect();
-                match splitted.as_slice() {
+                let split: Vec<&str> = msg.split(' ').collect();
+                match split.as_slice() {
                     &["search", hash_to_crack, begin, end] => {
                         info!("Search request from master");
 
