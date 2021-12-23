@@ -5,6 +5,8 @@ pub enum Message {
     Search(String, std::ops::Range<usize>),
     Stop,
     Exit,
+    // Seulement pour le serveur, pour quitter la tâche d'écoute de l'esclave associé
+    SlaveDisconnected(u32),
 }
 #[derive(Debug)]
 pub enum ConversionError {

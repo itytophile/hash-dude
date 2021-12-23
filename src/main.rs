@@ -103,17 +103,24 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>) {
 
             let state_clone = Arc::clone(&state);
 
-            let mut transfer_orders_task = tokio::spawn(async move {
+            // La tâche qui écoute le maître pour renvoyer les ordres vers
+            // l'esclave
+            tokio::spawn(async move {
                 while let Ok(msg) = broadcast_rx.recv().await {
                     let text = match msg {
                         Message::Search(hash, range) => {
                             let (begin, end) = (range.start, range.end);
                             let slaves_id_order = state_clone.slaves_id_order.lock().unwrap();
                             let slaves_count = slaves_id_order.len();
-                            let slave_pos = slaves_id_order
-                                .iter()
-                                .position(|&id| id == slave_id)
-                                .unwrap();
+                            // Peut échouer si l'esclave s'est déconnecté
+                            let slave_pos = if let Some(pos) =
+                                slaves_id_order.iter().position(|&id| id == slave_id)
+                            {
+                                pos
+                            } else {
+                                // On peut casser la boucle si l'esclave n'est plus là
+                                break;
+                            };
                             let gap = (end - begin) / slaves_count;
                             let remainder = (end - begin) % slaves_count;
                             // On va tout décaler pour distribuer équitablement le reste
@@ -136,47 +143,49 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>) {
                         }
                         Message::Stop => "stop".to_owned(),
                         Message::Exit => "exit".to_owned(),
+                        Message::SlaveDisconnected(id) => {
+                            if id == slave_id {
+                                break;
+                            } else {
+                                continue;
+                            }
+                        }
                     };
                     // arrêt de la boucle à la moindre erreur
                     if tx.send(ws::Message::Text(text)).await.is_err() {
                         break;
                     }
                 }
+                debug!(
+                    "Slave {} no longer exists, stopped listening to master",
+                    slave_id
+                )
             });
 
-            let broadcast_tx = state.broadcast_tx.clone();
-
-            let mut slave_listening_task = tokio::spawn(async move {
-                while let Some(Ok(msg)) = rx.next().await {
-                    match msg {
-                        ws::Message::Text(msg) => {
-                            let split: Vec<&str> = msg.split(' ').collect();
-                            match split.as_slice() {
-                                ["found", hash, word] => {
-                                    info!(
+            // La boucle qui écoute le slave
+            while let Some(Ok(msg)) = rx.next().await {
+                match msg {
+                    ws::Message::Text(msg) => {
+                        let split: Vec<&str> = msg.split(' ').collect();
+                        match split.as_slice() {
+                            ["found", hash, word] => {
+                                info!(
                                         "Slave {} found the word {} behind the hash {}. Now stopping all slaves...",
                                         slave_id, word, hash
                                     );
-                                    if let Err(err) = broadcast_tx.send(Message::Stop) {
-                                        warn!("Can't broadcast: {}", err)
-                                    }
+                                if let Err(err) = state.broadcast_tx.send(Message::Stop) {
+                                    warn!("Can't broadcast: {}", err)
                                 }
-                                _ => warn!("Unknown request from slave {}: {}", slave_id, msg),
                             }
+                            _ => warn!("Unknown request from slave {}: {}", slave_id, msg),
                         }
-                        ws::Message::Ping(_) => {
-                            warn!("Slave {} ping'd but pong not implemented", slave_id)
-                        }
-                        _ => warn!("Non textual message from slave {}: {:?}", slave_id, msg),
                     }
+                    ws::Message::Ping(_) => {
+                        warn!("Slave {} ping'd but pong not implemented", slave_id)
+                    }
+                    _ => warn!("Non textual message from slave {}: {:?}", slave_id, msg),
                 }
-            });
-
-            // Si l'une des deux tâches s'arrêtent, plus la peine de continuer.
-            tokio::select! {
-                _ = (&mut transfer_orders_task) => slave_listening_task.abort(),
-                _ = (&mut slave_listening_task) => transfer_orders_task.abort(),
-            };
+            }
 
             state
                 .slaves_id_order
@@ -184,7 +193,15 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>) {
                 .unwrap()
                 .retain(|&id| id != slave_id);
 
-            info!("Slave {} disconnected", slave_id)
+            info!("Slave {} disconnected", slave_id);
+
+            // Arrêt de la tâche d'écoute de l'esclave associé
+            if let Err(err) = state
+                .broadcast_tx
+                .send(Message::SlaveDisconnected(slave_id))
+            {
+                warn!("Can't broadcast: {}", err)
+            };
         } else {
             info!("Dude connected");
             if let Err(err) = execute_dude_msg(msg, &state.broadcast_tx) {
