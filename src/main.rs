@@ -11,17 +11,18 @@ use axum::{
     AddExtensionLayer, Router,
 };
 use futures::{sink::SinkExt, stream::StreamExt};
-use msg::{ConversionError, Message};
+use msg::Message;
 use std::{
     net::SocketAddr,
     sync::{Arc, Mutex},
 };
-use tokio::sync::broadcast::{self, error::SendError, Sender};
+use tokio::sync::broadcast;
 use tracing::{debug, info, warn, Level};
 
 // Our shared state
 struct AppState {
     slaves_id_order: Mutex<Vec<u32>>,
+    request_queue: Mutex<Vec<(String, std::ops::Range<usize>)>>,
     broadcast_tx: broadcast::Sender<Message>,
 }
 
@@ -45,6 +46,7 @@ async fn main() {
 
     let app_state = Arc::new(AppState {
         slaves_id_order: Mutex::new(Vec::new()),
+        request_queue: Mutex::new(Vec::new()),
         broadcast_tx,
     });
 
@@ -69,19 +71,6 @@ async fn websocket_handler(
         debug!("`{}` connected", user_agent.as_str());
     }
     ws.on_upgrade(|socket| websocket(socket, state))
-}
-
-enum ExecuteMsgError {
-    Broadcast(SendError<Message>),
-    Conversion(ConversionError),
-}
-
-fn execute_dude_msg(msg: String, broadcast_tx: &Sender<Message>) -> Result<usize, ExecuteMsgError> {
-    let message: Message = Message::try_from(msg.as_str()).map_err(ExecuteMsgError::Conversion)?;
-    info!("Dude wants to {:?}", message);
-    broadcast_tx
-        .send(message)
-        .map_err(ExecuteMsgError::Broadcast)
 }
 
 async fn websocket(stream: WebSocket, state: Arc<AppState>) {
@@ -204,16 +193,8 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>) {
             };
         } else {
             info!("Dude connected");
-            if let Err(err) = execute_dude_msg(msg, &state.broadcast_tx) {
-                match err {
-                    ExecuteMsgError::Broadcast(err) => {
-                        warn!("Can't broadcast: {}", err)
-                    }
-                    ExecuteMsgError::Conversion(err) => {
-                        warn!("{:?}", err)
-                    }
-                }
-            }
+
+            execute_msg(msg, &state);
 
             while let Some(Ok(msg)) = rx.next().await {
                 match msg {
@@ -224,18 +205,7 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>) {
                             break;
                         }
                     }
-                    ws::Message::Text(msg) => {
-                        if let Err(err) = execute_dude_msg(msg, &state.broadcast_tx) {
-                            match err {
-                                ExecuteMsgError::Broadcast(err) => {
-                                    warn!("Can't broadcast: {}", err)
-                                }
-                                ExecuteMsgError::Conversion(err) => {
-                                    warn!("{:?}", err)
-                                }
-                            }
-                        }
-                    }
+                    ws::Message::Text(msg) => execute_msg(msg, &state),
                     _ => warn!("Non textual message from dude: {:?}", msg),
                 }
             }
@@ -244,6 +214,25 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>) {
         }
     } else {
         warn!("Error with unknown client");
+    }
+}
+
+fn execute_msg(msg: String, state: &Arc<AppState>) {
+    match Message::try_from(msg.as_str()) {
+        Ok(message) => {
+            info!("Dude wants to {:?}", message);
+            if let Message::Search(hash, range) = &message {
+                state
+                    .request_queue
+                    .lock()
+                    .unwrap()
+                    .push((hash.clone(), range.clone()))
+            }
+            if let Err(err) = state.broadcast_tx.send(message) {
+                warn!("Can't broadcast: {}", err)
+            }
+        }
+        Err(err) => warn!("{:?}", err),
     }
 }
 
