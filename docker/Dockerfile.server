@@ -1,0 +1,14 @@
+FROM rust:alpine AS builder
+
+RUN apk update
+RUN apk add clang musl-dev
+COPY . .
+RUN mkdir .cargo && cp docker/config.toml .cargo/
+RUN cargo build --bin server --release
+RUN strip target/release/server
+
+FROM busybox
+
+COPY --from=builder /target/release/server .
+
+ENTRYPOINT ["/server"]
