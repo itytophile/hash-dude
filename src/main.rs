@@ -10,6 +10,7 @@ use axum::{
     routing::get,
     AddExtensionLayer, Router,
 };
+use clap::Parser;
 use futures::{
     sink::SinkExt,
     stream::{SplitSink, SplitStream, StreamExt},
@@ -29,8 +30,17 @@ struct AppState {
     broadcast_tx: broadcast::Sender<Message>,
 }
 
+#[derive(Parser, Debug)]
+#[clap(about, version, author)]
+struct Args {
+    #[clap(short, long, default_value = "127.0.0.1:3000")]
+    address: String,
+}
+
 #[tokio::main]
 async fn main() {
+    let args = Args::parse();
+
     if std::env::var_os("RUST_LOG").is_none() {
         tracing_subscriber::fmt()
             .with_max_level(Level::DEBUG)
@@ -39,11 +49,7 @@ async fn main() {
         tracing_subscriber::fmt::init();
     }
 
-    let addr: SocketAddr = std::env::args()
-        .nth(1)
-        .expect("This program needs an address (like 127.0.0.1:3000) as first argument!")
-        .parse()
-        .expect("Can't parse provided address");
+    let addr: SocketAddr = args.address.parse().expect("Can't parse provided address");
 
     let (broadcast_tx, _) = broadcast::channel(100);
 

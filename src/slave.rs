@@ -1,8 +1,9 @@
 use alphabet::{get_number_from_word, get_word_from_number};
+use clap::Parser;
 use futures::{stream::SplitSink, SinkExt};
 use futures_util::StreamExt;
 use md5::{Digest, Md5};
-use std::{env, ops::Range};
+use std::ops::Range;
 use tokio::{net::TcpStream, sync::watch, task::JoinHandle};
 use tokio_tungstenite::{
     connect_async, tungstenite::protocol::Message, MaybeTlsStream, WebSocketStream,
@@ -14,6 +15,13 @@ use tracing::{debug, error, info, warn, Level};
 // j'ai juste copié collé la valeur de sortie de ws_stream.split()
 type WebSocketSender = SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>;
 
+#[derive(Parser, Debug)]
+#[clap(about, version, author)]
+struct Args {
+    #[clap(default_value = "ws://127.0.0.1:3000/ws")]
+    ws_address: String,
+}
+
 #[tokio::main]
 async fn main() {
     if std::env::var_os("RUST_LOG").is_none() {
@@ -24,9 +32,7 @@ async fn main() {
         tracing_subscriber::fmt::init();
     }
 
-    let connect_addr = env::args()
-        .nth(1)
-        .expect("This program needs a WebSocket URL as first argument!");
+    let connect_addr = Args::parse().ws_address;
 
     let url = url::Url::parse(&connect_addr).unwrap();
 

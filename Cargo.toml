@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 default-run = "server"
 license = "MIT"
+authors = ["ityt <imran.tierce@protonmail.com>"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [lib]
@@ -30,6 +31,7 @@ url = "2"
 futures-util = "0.3"
 md-5 = "0.10"
 hex = "0.4"
+clap = { version = "3.0.0-rc.8", features = ["derive"] }
 
 [profile.release]
 lto = true
