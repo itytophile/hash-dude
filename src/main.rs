@@ -10,7 +10,10 @@ use axum::{
     routing::get,
     AddExtensionLayer, Router,
 };
-use futures::{sink::SinkExt, stream::StreamExt};
+use futures::{
+    sink::SinkExt,
+    stream::{SplitSink, SplitStream, StreamExt},
+};
 use msg::Message;
 use std::{
     net::SocketAddr,
@@ -88,108 +91,14 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>) {
 
             info!("Slave connected with id = {}", slave_id);
 
-            let mut broadcast_rx = state.broadcast_tx.subscribe();
+            tokio::spawn(master_to_slave_relay_task(
+                state.broadcast_tx.subscribe(),
+                Arc::clone(&state),
+                slave_id,
+                tx,
+            ));
 
-            let state_clone = Arc::clone(&state);
-
-            // La tâche qui écoute le maître pour renvoyer les ordres vers
-            // l'esclave
-            tokio::spawn(async move {
-                while let Ok(msg) = broadcast_rx.recv().await {
-                    let text = match msg {
-                        Message::Search(hash, range) => {
-                            let (begin, end) = (range.start, range.end);
-                            let slaves_id_order = state_clone.slaves_id_order.lock().unwrap();
-                            let slaves_count = slaves_id_order.len();
-                            // Peut échouer si l'esclave s'est déconnecté
-                            let slave_pos = if let Some(pos) =
-                                slaves_id_order.iter().position(|&id| id == slave_id)
-                            {
-                                pos
-                            } else {
-                                // On peut casser la boucle si l'esclave n'est plus là
-                                break;
-                            };
-                            let gap = (end - begin) / slaves_count;
-                            let remainder = (end - begin) % slaves_count;
-                            // On va tout décaler pour distribuer équitablement le reste
-                            // donc 1 chacun pour les concernés (slave_pos < remainder)
-                            let slave_begin = begin
-                                + gap * slave_pos
-                                + if slave_pos < remainder {
-                                    slave_pos
-                                } else {
-                                    remainder
-                                };
-                            let slave_end =
-                                slave_begin + gap + if slave_pos < remainder { 1 } else { 0 };
-                            format!(
-                                "search {} {} {}",
-                                hash,
-                                get_word_from_number(slave_begin),
-                                get_word_from_number(slave_end)
-                            )
-                        }
-                        Message::Stop => "stop".to_owned(),
-                        Message::Exit => "exit".to_owned(),
-                        Message::SlaveDisconnected(id) => {
-                            if id == slave_id {
-                                break;
-                            } else {
-                                continue;
-                            }
-                        }
-                    };
-                    // arrêt de la boucle à la moindre erreur
-                    if tx.send(ws::Message::Text(text)).await.is_err() {
-                        break;
-                    }
-                }
-                debug!(
-                    "Slave {} no longer exists, stopped listening to master",
-                    slave_id
-                )
-            });
-
-            // La boucle qui écoute le slave
-            while let Some(Ok(msg)) = rx.next().await {
-                match msg {
-                    ws::Message::Text(msg) => {
-                        let split: Vec<&str> = msg.split(' ').collect();
-                        match split.as_slice() {
-                            ["found", hash, word] => {
-                                info!(
-                                    "Slave {} found the word {} behind the hash {}. Now stopping all slaves...",
-                                    slave_id, word, hash
-                                );
-
-                                if let Err(err) = state.broadcast_tx.send(Message::Stop) {
-                                    warn!("Can't broadcast: {}", err)
-                                }
-                                
-                                let mut request_queue = state.request_queue.lock().unwrap();
-                                request_queue.remove(0);
-                                if !request_queue.is_empty() {
-                                    info!("Sending queued request: {:?}", request_queue[0]);
-
-                                    let (hash, range) = &request_queue[0];
-                                    if let Err(err) = state
-                                        .broadcast_tx
-                                        .send(Message::Search(hash.clone(), range.clone()))
-                                    {
-                                        warn!("Can't broadcast: {}", err)
-                                    }
-                                }
-                            }
-                            _ => warn!("Unknown request from slave {}: {}", slave_id, msg),
-                        }
-                    }
-                    ws::Message::Ping(_) => {
-                        warn!("Slave {} ping'd but pong not implemented", slave_id)
-                    }
-                    _ => warn!("Non textual message from slave {}: {:?}", slave_id, msg),
-                }
-            }
+            slave_listening_task(rx, slave_id, &state).await;
 
             state
                 .slaves_id_order
@@ -229,6 +138,111 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>) {
         }
     } else {
         warn!("Error with unknown client");
+    }
+}
+
+async fn master_to_slave_relay_task(
+    mut broadcast_rx: broadcast::Receiver<Message>,
+    state_clone: Arc<AppState>,
+    slave_id: u32,
+    mut tx: SplitSink<WebSocket, ws::Message>,
+) {
+    while let Ok(msg) = broadcast_rx.recv().await {
+        let text = match msg {
+            Message::Search(hash, range) => {
+                let (begin, end) = (range.start, range.end);
+                let slaves_id_order = state_clone.slaves_id_order.lock().unwrap();
+                let slaves_count = slaves_id_order.len();
+                // Peut échouer si l'esclave s'est déconnecté
+                let slave_pos =
+                    if let Some(pos) = slaves_id_order.iter().position(|&id| id == slave_id) {
+                        pos
+                    } else {
+                        // On peut casser la boucle si l'esclave n'est plus là
+                        break;
+                    };
+                let gap = (end - begin) / slaves_count;
+                let remainder = (end - begin) % slaves_count;
+                // On va tout décaler pour distribuer équitablement le reste
+                // donc 1 chacun pour les concernés (slave_pos < remainder)
+                let slave_begin = begin
+                    + gap * slave_pos
+                    + if slave_pos < remainder {
+                        slave_pos
+                    } else {
+                        remainder
+                    };
+                let slave_end = slave_begin + gap + if slave_pos < remainder { 1 } else { 0 };
+                format!(
+                    "search {} {} {}",
+                    hash,
+                    get_word_from_number(slave_begin),
+                    get_word_from_number(slave_end)
+                )
+            }
+            Message::Stop => "stop".to_owned(),
+            Message::Exit => "exit".to_owned(),
+            Message::SlaveDisconnected(id) => {
+                if id == slave_id {
+                    break;
+                } else {
+                    continue;
+                }
+            }
+        };
+        // arrêt de la boucle à la moindre erreur
+        if tx.send(ws::Message::Text(text)).await.is_err() {
+            break;
+        }
+    }
+    debug!(
+        "Slave {} no longer exists, stopped listening to master",
+        slave_id
+    )
+}
+
+async fn slave_listening_task(
+    mut rx: SplitStream<WebSocket>,
+    slave_id: u32,
+    state: &Arc<AppState>,
+) {
+    while let Some(Ok(msg)) = rx.next().await {
+        match msg {
+            ws::Message::Text(msg) => {
+                let split: Vec<&str> = msg.split(' ').collect();
+                match split.as_slice() {
+                    ["found", hash, word] => {
+                        info!(
+                            "Slave {} found the word {} behind the hash {}. Now stopping all slaves...",
+                            slave_id, word, hash
+                        );
+
+                        if let Err(err) = state.broadcast_tx.send(Message::Stop) {
+                            warn!("Can't broadcast: {}", err)
+                        }
+
+                        let mut request_queue = state.request_queue.lock().unwrap();
+                        request_queue.remove(0);
+                        if !request_queue.is_empty() {
+                            info!("Sending queued request: {:?}", request_queue[0]);
+
+                            let (hash, range) = &request_queue[0];
+                            if let Err(err) = state
+                                .broadcast_tx
+                                .send(Message::Search(hash.clone(), range.clone()))
+                            {
+                                warn!("Can't broadcast: {}", err)
+                            }
+                        }
+                    }
+                    _ => warn!("Unknown request from slave {}: {}", slave_id, msg),
+                }
+            }
+            ws::Message::Ping(_) => {
+                warn!("Slave {} ping'd but pong not implemented", slave_id)
+            }
+            _ => warn!("Non textual message from slave {}: {:?}", slave_id, msg),
+        }
     }
 }
 
