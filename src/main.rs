@@ -115,12 +115,7 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>) {
             info!("Slave {} disconnected", slave_id);
 
             // Arrêt de la tâche d'écoute de l'esclave associé
-            if let Err(err) = state
-                .broadcast_tx
-                .send(Message::SlaveDisconnected(slave_id))
-            {
-                warn!("Can't broadcast: {}", err)
-            };
+            broadcast_message(&state.broadcast_tx, Message::SlaveDisconnected(slave_id));
         } else {
             info!("Dude connected");
 
@@ -222,10 +217,7 @@ async fn slave_listening_task(
                             "Slave {} found the word {} behind the hash {}. Now stopping all slaves...",
                             slave_id, word, hash
                         );
-
-                        if let Err(err) = state.broadcast_tx.send(Message::Stop) {
-                            warn!("Can't broadcast: {}", err)
-                        }
+                        broadcast_message(&state.broadcast_tx, Message::Stop);
 
                         let mut request_queue = state.request_queue.lock().unwrap();
                         request_queue.remove(0);
@@ -233,12 +225,10 @@ async fn slave_listening_task(
                             info!("Sending queued request: {:?}", request_queue[0]);
 
                             let (hash, range) = &request_queue[0];
-                            if let Err(err) = state
-                                .broadcast_tx
-                                .send(Message::Search(hash.clone(), range.clone()))
-                            {
-                                warn!("Can't broadcast: {}", err)
-                            }
+                            broadcast_message(
+                                &state.broadcast_tx,
+                                Message::Search(hash.clone(), range.clone()),
+                            );
                         }
                     }
                     _ => warn!("Unknown request from slave {}: {}", slave_id, msg),
@@ -257,26 +247,49 @@ fn execute_msg(msg: String, state: &Arc<AppState>) {
         Ok(message) => {
             info!("Dude wants to {:?}", message);
 
-            if let Message::Search(hash, range) = message {
-                let mut request_queue = state.request_queue.lock().unwrap();
+            match message {
+                Message::Search(hash, range) => {
+                    let mut request_queue = state.request_queue.lock().unwrap();
 
-                if request_queue.is_empty() {
-                    if let Err(err) = state
-                        .broadcast_tx
-                        .send(Message::Search(hash.clone(), range.clone()))
-                    {
-                        warn!("Can't broadcast: {}", err)
+                    if request_queue.is_empty() {
+                        broadcast_message(
+                            &state.broadcast_tx,
+                            Message::Search(hash.clone(), range.clone()),
+                        );
+                    } else {
+                        debug!("Search request pushed to queue");
                     }
-                } else {
-                    debug!("Search request pushed to queue");
-                }
 
-                request_queue.push((hash, range))
-            } else if let Err(err) = state.broadcast_tx.send(message) {
-                warn!("Can't broadcast: {}", err)
+                    request_queue.push((hash, range))
+                }
+                Message::Stop => {
+                    let mut request_queue = state.request_queue.lock().unwrap();
+                    if !request_queue.is_empty() {
+                        request_queue.remove(0);
+                        broadcast_message(&state.broadcast_tx, message);
+                        if !request_queue.is_empty() {
+                            info!("Sending queued request: {:?}", request_queue[0]);
+                            
+                            let (hash, range) = &request_queue[0];
+                            broadcast_message(
+                                &state.broadcast_tx,
+                                Message::Search(hash.clone(), range.clone()),
+                            );
+                        }
+                    } else {
+                        warn!("Nothing to stop")
+                    }
+                }
+                message => broadcast_message(&state.broadcast_tx, message),
             }
         }
         Err(err) => warn!("{:?}", err),
+    }
+}
+
+fn broadcast_message(tx: &broadcast::Sender<Message>, message: Message) {
+    if let Err(err) = tx.send(message) {
+        warn!("Can't broadcast: {}", err)
     }
 }
 
