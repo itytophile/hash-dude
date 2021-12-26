@@ -129,13 +129,24 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>) {
 
             let mut rx = state.tx_to_listeners.subscribe();
 
-            while let Ok(new_size) = rx.recv().await {
-                if let Err(err) = tx_to_client
-                    .send(ws::Message::Binary(new_size.to_be_bytes().to_vec()))
-                    .await
-                {
-                    warn!("Can't send to listener: {}", err);
-                    break;
+            tokio::spawn(async move {
+                while let Ok(new_size) = rx.recv().await {
+                    if let Err(err) = tx_to_client
+                        .send(ws::Message::Binary(new_size.to_be_bytes().to_vec()))
+                        .await
+                    {
+                        // Permet de jeter cette tâche qui ne sert plus
+                        // car le listener n'est plus connecté
+                        warn!("Can't send to listener: {}", err);
+                        break;
+                    }
+                }
+            });
+
+            while let Some(Ok(msg)) = rx_from_client.next().await {
+                match msg {
+                    ws::Message::Close(_) => break,
+                    msg => warn!("Unknown message from listener: {:?}", msg),
                 }
             }
 
