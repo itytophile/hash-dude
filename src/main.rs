@@ -34,7 +34,7 @@ struct AppState {
 #[derive(Parser, Debug)]
 #[clap(about, version, author)]
 struct Args {
-    #[clap(short, long, default_value = "127.0.0.1:3000")]
+    #[clap(short, long, default_value = "0.0.0.0:3000")]
     address: String,
 }
 

@@ -18,7 +18,7 @@ type WebSocketSender = SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Mes
 #[derive(Parser, Debug)]
 #[clap(about, version, author)]
 struct Args {
-    #[clap(default_value = "ws://127.0.0.1:3000/ws")]
+    #[clap(default_value = "ws://0.0.0.0:3000/ws")]
     ws_address: String,
 }
 
