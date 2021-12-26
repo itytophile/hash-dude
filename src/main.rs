@@ -144,10 +144,8 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>) {
 
             info!("Listener disconnected");
         }
-        _ => {
+        "dude" => {
             info!("Dude connected");
-
-            execute_msg(msg, &state);
 
             while let Some(Ok(msg)) = rx_from_client.next().await {
                 match msg {
@@ -158,12 +156,56 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>) {
                             break;
                         }
                     }
-                    ws::Message::Text(msg) => execute_msg(msg, &state),
+                    ws::Message::Text(msg) => match Message::try_from(msg.as_str()) {
+                        Ok(message) => {
+                            info!("Dude wants to {:?}", message);
+
+                            match message {
+                                Message::Search(hash, range) => {
+                                    let mut request_queue = state.request_queue.lock().unwrap();
+
+                                    if request_queue.is_empty() {
+                                        broadcast_message(
+                                            &state.tx_to_slaves,
+                                            Message::Search(hash.clone(), range.clone()),
+                                        );
+                                    } else {
+                                        debug!("Search request pushed to queue");
+                                    }
+
+                                    request_queue.push((hash, range))
+                                }
+                                Message::Stop => {
+                                    let mut request_queue = state.request_queue.lock().unwrap();
+                                    if !request_queue.is_empty() {
+                                        request_queue.remove(0);
+                                        broadcast_message(&state.tx_to_slaves, message);
+                                        if !request_queue.is_empty() {
+                                            info!("Sending queued request: {:?}", request_queue[0]);
+
+                                            let (hash, range) = &request_queue[0];
+                                            broadcast_message(
+                                                &state.tx_to_slaves,
+                                                Message::Search(hash.clone(), range.clone()),
+                                            );
+                                        }
+                                    } else {
+                                        warn!("Nothing to stop")
+                                    }
+                                }
+                                message => broadcast_message(&state.tx_to_slaves, message),
+                            }
+                        }
+                        Err(err) => warn!("{:?}", err),
+                    },
                     _ => warn!("Non textual message from dude: {:?}", msg),
                 }
             }
 
             info!("Dude disconnected")
+        }
+        msg => {
+            warn!("Unknown type provided: {}", msg)
         }
     }
 }
@@ -266,51 +308,6 @@ async fn slave_listening_task(
             }
             _ => warn!("Non textual message from slave {}: {:?}", slave_id, msg),
         }
-    }
-}
-
-fn execute_msg(msg: String, state: &Arc<AppState>) {
-    match Message::try_from(msg.as_str()) {
-        Ok(message) => {
-            info!("Dude wants to {:?}", message);
-
-            match message {
-                Message::Search(hash, range) => {
-                    let mut request_queue = state.request_queue.lock().unwrap();
-
-                    if request_queue.is_empty() {
-                        broadcast_message(
-                            &state.tx_to_slaves,
-                            Message::Search(hash.clone(), range.clone()),
-                        );
-                    } else {
-                        debug!("Search request pushed to queue");
-                    }
-
-                    request_queue.push((hash, range))
-                }
-                Message::Stop => {
-                    let mut request_queue = state.request_queue.lock().unwrap();
-                    if !request_queue.is_empty() {
-                        request_queue.remove(0);
-                        broadcast_message(&state.tx_to_slaves, message);
-                        if !request_queue.is_empty() {
-                            info!("Sending queued request: {:?}", request_queue[0]);
-
-                            let (hash, range) = &request_queue[0];
-                            broadcast_message(
-                                &state.tx_to_slaves,
-                                Message::Search(hash.clone(), range.clone()),
-                            );
-                        }
-                    } else {
-                        warn!("Nothing to stop")
-                    }
-                }
-                message => broadcast_message(&state.tx_to_slaves, message),
-            }
-        }
-        Err(err) => warn!("{:?}", err),
     }
 }
 
