@@ -170,13 +170,22 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>) {
                                         debug!("Search request pushed to queue");
                                     }
 
-                                    request_queue.push((hash, range))
+                                    request_queue.push((hash, range));
+
+                                    broadcast_message(&state.tx_to_listeners, request_queue.len())
                                 }
                                 ToSlaveMessage::Stop => {
                                     let mut request_queue = state.request_queue.lock().unwrap();
                                     if !request_queue.is_empty() {
                                         request_queue.remove(0);
+
+                                        broadcast_message(
+                                            &state.tx_to_listeners,
+                                            request_queue.len(),
+                                        );
+
                                         broadcast_message(&state.tx_to_slaves, message);
+
                                         if !request_queue.is_empty() {
                                             info!("Sending queued request: {:?}", request_queue[0]);
 
@@ -279,7 +288,11 @@ async fn slave_listening_task(
                         broadcast_message(&state.tx_to_slaves, ToSlaveMessage::Stop);
 
                         let mut request_queue = state.request_queue.lock().unwrap();
+
                         request_queue.remove(0);
+
+                        broadcast_message(&state.tx_to_listeners, request_queue.len());
+
                         if !request_queue.is_empty() {
                             info!("Sending queued request: {:?}", request_queue[0]);
 
@@ -301,7 +314,7 @@ async fn slave_listening_task(
     }
 }
 
-fn broadcast_message(tx: &broadcast::Sender<ToSlaveMessage>, message: ToSlaveMessage) {
+fn broadcast_message<T>(tx: &broadcast::Sender<T>, message: T) {
     if let Err(err) = tx.send(message) {
         warn!("Can't broadcast: {}", err)
     }
