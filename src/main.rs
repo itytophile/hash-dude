@@ -27,7 +27,8 @@ use tracing::{debug, info, warn, Level};
 struct AppState {
     slaves_id_order: Mutex<Vec<u32>>,
     request_queue: Mutex<Vec<(String, std::ops::Range<usize>)>>,
-    broadcast_tx: broadcast::Sender<Message>,
+    tx_to_slaves: broadcast::Sender<Message>,
+    tx_to_listeners: broadcast::Sender<usize>,
 }
 
 #[derive(Parser, Debug)]
@@ -51,12 +52,14 @@ async fn main() {
 
     let addr: SocketAddr = args.address.parse().expect("Can't parse provided address");
 
-    let (broadcast_tx, _) = broadcast::channel(100);
+    let (tx_to_slaves, _) = broadcast::channel(100);
+    let (tx_to_listeners, _) = broadcast::channel(100);
 
     let app_state = Arc::new(AppState {
         slaves_id_order: Mutex::new(Vec::new()),
         request_queue: Mutex::new(Vec::new()),
-        broadcast_tx,
+        tx_to_slaves,
+        tx_to_listeners,
     });
 
     let app = Router::new()
@@ -83,10 +86,17 @@ async fn websocket_handler(
 }
 
 async fn websocket(stream: WebSocket, state: Arc<AppState>) {
-    let (mut tx, mut rx) = stream.split();
+    let (mut tx_to_client, mut rx_from_client) = stream.split();
 
-    if let Some(Ok(ws::Message::Text(msg))) = rx.next().await {
-        if msg == "slave" {
+    let msg = if let Some(Ok(ws::Message::Text(msg))) = rx_from_client.next().await {
+        msg
+    } else {
+        warn!("Error with unknown client");
+        return;
+    };
+
+    match msg.as_str() {
+        "slave" => {
             let slave_id = {
                 // On utilise ce bloc pour drop le mutex le plus tôt possible
                 let mut slaves_id_order = state.slaves_id_order.lock().unwrap();
@@ -98,13 +108,13 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>) {
             info!("Slave connected with id = {}", slave_id);
 
             tokio::spawn(master_to_slave_relay_task(
-                state.broadcast_tx.subscribe(),
+                state.tx_to_slaves.subscribe(),
                 Arc::clone(&state),
                 slave_id,
-                tx,
+                tx_to_client,
             ));
 
-            slave_listening_task(rx, slave_id, &state).await;
+            slave_listening_task(rx_from_client, slave_id, &state).await;
 
             state
                 .slaves_id_order
@@ -115,18 +125,36 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>) {
             info!("Slave {} disconnected", slave_id);
 
             // Arrêt de la tâche d'écoute de l'esclave associé
-            broadcast_message(&state.broadcast_tx, Message::SlaveDisconnected(slave_id));
-        } else {
+            broadcast_message(&state.tx_to_slaves, Message::SlaveDisconnected(slave_id));
+        }
+        "queue length" => {
+            info!("Listener connected");
+
+            let mut rx = state.tx_to_listeners.subscribe();
+
+            while let Ok(new_size) = rx.recv().await {
+                if let Err(err) = tx_to_client
+                    .send(ws::Message::Binary(new_size.to_be_bytes().to_vec()))
+                    .await
+                {
+                    warn!("Can't send to listener: {}", err);
+                    break;
+                }
+            }
+
+            info!("Listener disconnected");
+        }
+        _ => {
             info!("Dude connected");
 
             execute_msg(msg, &state);
 
-            while let Some(Ok(msg)) = rx.next().await {
+            while let Some(Ok(msg)) = rx_from_client.next().await {
                 match msg {
                     // On est poli, on pong quand on a un ping
                     ws::Message::Ping(payload) => {
                         debug!("Ping received from dude");
-                        if tx.send(ws::Message::Pong(payload)).await.is_err() {
+                        if tx_to_client.send(ws::Message::Pong(payload)).await.is_err() {
                             break;
                         }
                     }
@@ -137,18 +165,16 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>) {
 
             info!("Dude disconnected")
         }
-    } else {
-        warn!("Error with unknown client");
     }
 }
 
 async fn master_to_slave_relay_task(
-    mut broadcast_rx: broadcast::Receiver<Message>,
+    mut rx_from_master: broadcast::Receiver<Message>,
     state_clone: Arc<AppState>,
     slave_id: u32,
-    mut tx: SplitSink<WebSocket, ws::Message>,
+    mut tx_to_slave: SplitSink<WebSocket, ws::Message>,
 ) {
-    while let Ok(msg) = broadcast_rx.recv().await {
+    while let Ok(msg) = rx_from_master.recv().await {
         let text = match msg {
             Message::Search(hash, range) => {
                 let (begin, end) = (range.start, range.end);
@@ -192,7 +218,8 @@ async fn master_to_slave_relay_task(
             }
         };
         // arrêt de la boucle à la moindre erreur
-        if tx.send(ws::Message::Text(text)).await.is_err() {
+        if let Err(err) = tx_to_slave.send(ws::Message::Text(text)).await {
+            warn!("Can't send to slave: {}", err);
             break;
         }
     }
@@ -217,7 +244,7 @@ async fn slave_listening_task(
                             "Slave {} found the word {} behind the hash {}. Now stopping all slaves...",
                             slave_id, word, hash
                         );
-                        broadcast_message(&state.broadcast_tx, Message::Stop);
+                        broadcast_message(&state.tx_to_slaves, Message::Stop);
 
                         let mut request_queue = state.request_queue.lock().unwrap();
                         request_queue.remove(0);
@@ -226,7 +253,7 @@ async fn slave_listening_task(
 
                             let (hash, range) = &request_queue[0];
                             broadcast_message(
-                                &state.broadcast_tx,
+                                &state.tx_to_slaves,
                                 Message::Search(hash.clone(), range.clone()),
                             );
                         }
@@ -253,7 +280,7 @@ fn execute_msg(msg: String, state: &Arc<AppState>) {
 
                     if request_queue.is_empty() {
                         broadcast_message(
-                            &state.broadcast_tx,
+                            &state.tx_to_slaves,
                             Message::Search(hash.clone(), range.clone()),
                         );
                     } else {
@@ -266,13 +293,13 @@ fn execute_msg(msg: String, state: &Arc<AppState>) {
                     let mut request_queue = state.request_queue.lock().unwrap();
                     if !request_queue.is_empty() {
                         request_queue.remove(0);
-                        broadcast_message(&state.broadcast_tx, message);
+                        broadcast_message(&state.tx_to_slaves, message);
                         if !request_queue.is_empty() {
                             info!("Sending queued request: {:?}", request_queue[0]);
-                            
+
                             let (hash, range) = &request_queue[0];
                             broadcast_message(
-                                &state.broadcast_tx,
+                                &state.tx_to_slaves,
                                 Message::Search(hash.clone(), range.clone()),
                             );
                         }
@@ -280,7 +307,7 @@ fn execute_msg(msg: String, state: &Arc<AppState>) {
                         warn!("Nothing to stop")
                     }
                 }
-                message => broadcast_message(&state.broadcast_tx, message),
+                message => broadcast_message(&state.tx_to_slaves, message),
             }
         }
         Err(err) => warn!("{:?}", err),
