@@ -1,12 +1,10 @@
 use alphabet::get_number_from_word;
 
 #[derive(Debug, Clone)]
-pub enum Message {
+pub enum ToSlaveMessage {
     Search(String, std::ops::Range<usize>),
     Stop,
     Exit,
-    // Seulement pour le serveur, pour quitter la tâche d'écoute de l'esclave associé
-    SlaveDisconnected(u32),
 }
 
 #[derive(Debug)]
@@ -15,7 +13,7 @@ pub enum ConversionError {
     WordProblem(String),
 }
 
-impl TryFrom<&str> for Message {
+impl TryFrom<&str> for ToSlaveMessage {
     type Error = ConversionError;
 
     fn try_from(value: &str) -> Result<Self, Self::Error> {
@@ -24,7 +22,7 @@ impl TryFrom<&str> for Message {
             &["search", hash, begin, end] => {
                 match (get_number_from_word(begin), get_number_from_word(end)) {
                     (Ok(begin_num), Ok(end_num)) => {
-                        Ok(Message::Search(hash.to_owned(), begin_num..end_num))
+                        Ok(ToSlaveMessage::Search(hash.to_owned(), begin_num..end_num))
                     }
                     (Ok(_), Err(err)) => Err(ConversionError::WordProblem(format!(
                         "Problem with end word: {}",
@@ -40,8 +38,8 @@ impl TryFrom<&str> for Message {
                     ))),
                 }
             }
-            ["stop"] => Ok(Message::Stop),
-            ["exit"] => Ok(Message::Exit),
+            ["stop"] => Ok(ToSlaveMessage::Stop),
+            ["exit"] => Ok(ToSlaveMessage::Exit),
             _ => Err(ConversionError::UnknownRequest),
         }
     }

@@ -15,7 +15,7 @@ use futures::{
     sink::SinkExt,
     stream::{SplitSink, SplitStream, StreamExt},
 };
-use msg::Message;
+use msg::ToSlaveMessage;
 use std::{
     net::SocketAddr,
     sync::{Arc, Mutex},
@@ -27,7 +27,7 @@ use tracing::{debug, info, warn, Level};
 struct AppState {
     slaves_id_order: Mutex<Vec<u32>>,
     request_queue: Mutex<Vec<(String, std::ops::Range<usize>)>>,
-    tx_to_slaves: broadcast::Sender<Message>,
+    tx_to_slaves: broadcast::Sender<ToSlaveMessage>,
     tx_to_listeners: broadcast::Sender<usize>,
 }
 
@@ -123,9 +123,6 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>) {
                 .retain(|&id| id != slave_id);
 
             info!("Slave {} disconnected", slave_id);
-
-            // Arrêt de la tâche d'écoute de l'esclave associé
-            broadcast_message(&state.tx_to_slaves, Message::SlaveDisconnected(slave_id));
         }
         "queue length" => {
             info!("Listener connected");
@@ -156,18 +153,18 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>) {
                             break;
                         }
                     }
-                    ws::Message::Text(msg) => match Message::try_from(msg.as_str()) {
+                    ws::Message::Text(msg) => match ToSlaveMessage::try_from(msg.as_str()) {
                         Ok(message) => {
                             info!("Dude wants to {:?}", message);
 
                             match message {
-                                Message::Search(hash, range) => {
+                                ToSlaveMessage::Search(hash, range) => {
                                     let mut request_queue = state.request_queue.lock().unwrap();
 
                                     if request_queue.is_empty() {
                                         broadcast_message(
                                             &state.tx_to_slaves,
-                                            Message::Search(hash.clone(), range.clone()),
+                                            ToSlaveMessage::Search(hash.clone(), range.clone()),
                                         );
                                     } else {
                                         debug!("Search request pushed to queue");
@@ -175,7 +172,7 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>) {
 
                                     request_queue.push((hash, range))
                                 }
-                                Message::Stop => {
+                                ToSlaveMessage::Stop => {
                                     let mut request_queue = state.request_queue.lock().unwrap();
                                     if !request_queue.is_empty() {
                                         request_queue.remove(0);
@@ -186,7 +183,7 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>) {
                                             let (hash, range) = &request_queue[0];
                                             broadcast_message(
                                                 &state.tx_to_slaves,
-                                                Message::Search(hash.clone(), range.clone()),
+                                                ToSlaveMessage::Search(hash.clone(), range.clone()),
                                             );
                                         }
                                     } else {
@@ -211,14 +208,14 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>) {
 }
 
 async fn master_to_slave_relay_task(
-    mut rx_from_master: broadcast::Receiver<Message>,
+    mut rx_from_master: broadcast::Receiver<ToSlaveMessage>,
     state_clone: Arc<AppState>,
     slave_id: u32,
     mut tx_to_slave: SplitSink<WebSocket, ws::Message>,
 ) {
     while let Ok(msg) = rx_from_master.recv().await {
         let text = match msg {
-            Message::Search(hash, range) => {
+            ToSlaveMessage::Search(hash, range) => {
                 let (begin, end) = (range.start, range.end);
                 let slaves_id_order = state_clone.slaves_id_order.lock().unwrap();
                 let slaves_count = slaves_id_order.len();
@@ -249,15 +246,8 @@ async fn master_to_slave_relay_task(
                     get_word_from_number(slave_end)
                 )
             }
-            Message::Stop => "stop".to_owned(),
-            Message::Exit => "exit".to_owned(),
-            Message::SlaveDisconnected(id) => {
-                if id == slave_id {
-                    break;
-                } else {
-                    continue;
-                }
-            }
+            ToSlaveMessage::Stop => "stop".to_owned(),
+            ToSlaveMessage::Exit => "exit".to_owned(),
         };
         // arrêt de la boucle à la moindre erreur
         if let Err(err) = tx_to_slave.send(ws::Message::Text(text)).await {
@@ -286,7 +276,7 @@ async fn slave_listening_task(
                             "Slave {} found the word {} behind the hash {}. Now stopping all slaves...",
                             slave_id, word, hash
                         );
-                        broadcast_message(&state.tx_to_slaves, Message::Stop);
+                        broadcast_message(&state.tx_to_slaves, ToSlaveMessage::Stop);
 
                         let mut request_queue = state.request_queue.lock().unwrap();
                         request_queue.remove(0);
@@ -296,7 +286,7 @@ async fn slave_listening_task(
                             let (hash, range) = &request_queue[0];
                             broadcast_message(
                                 &state.tx_to_slaves,
-                                Message::Search(hash.clone(), range.clone()),
+                                ToSlaveMessage::Search(hash.clone(), range.clone()),
                             );
                         }
                     }
@@ -311,7 +301,7 @@ async fn slave_listening_task(
     }
 }
 
-fn broadcast_message(tx: &broadcast::Sender<Message>, message: Message) {
+fn broadcast_message(tx: &broadcast::Sender<ToSlaveMessage>, message: ToSlaveMessage) {
     if let Err(err) = tx.send(message) {
         warn!("Can't broadcast: {}", err)
     }
