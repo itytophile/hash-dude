@@ -6,9 +6,17 @@ Before building:
 cargo vendor
 ```
 
-## Scaling
+## Monitoring
+
+After creating the swarm:
 
 ```sh
-docker compose up
+docker stack deploy --compose-file docker-compose.yml stackhash
 python docker/monitor.py
+```
+
+To delete the stack:
+
+```sh
+docker stack rm stackhash
 ```

@@ -35,6 +35,6 @@ while True:
             if replicas_count != count:
                 print(f"Updating slaves: {replicas_count} ->", count)
                 # peux pas utiliser --no-recreate https://github.com/docker/compose/issues/8940
-                os.system(f"docker compose up -d --scale slave={count}")
+                os.system(f"docker service scale stackhash_slave={count}")
                 replicas_count = count
             break
