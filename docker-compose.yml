@@ -1,0 +1,12 @@
+version: "3.9"
+
+services:
+  server:
+    image: itytophile/hash-server
+    ports:
+      - "3000:3000"
+  slave:
+    image: itytophile/hash-slave
+    depends_on:
+      - server
+    command: ws://server:3000/ws

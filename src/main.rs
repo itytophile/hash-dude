@@ -15,7 +15,7 @@ use futures::{
     sink::SinkExt,
     stream::{SplitSink, SplitStream, StreamExt},
 };
-use msg::Message;
+use msg::ToSlaveMessage;
 use std::{
     net::SocketAddr,
     sync::{Arc, Mutex},
@@ -27,13 +27,14 @@ use tracing::{debug, info, warn, Level};
 struct AppState {
     slaves_id_order: Mutex<Vec<u32>>,
     request_queue: Mutex<Vec<(String, std::ops::Range<usize>)>>,
-    broadcast_tx: broadcast::Sender<Message>,
+    tx_to_slaves: broadcast::Sender<ToSlaveMessage>,
+    tx_to_listeners: broadcast::Sender<usize>,
 }
 
 #[derive(Parser, Debug)]
 #[clap(about, version, author)]
 struct Args {
-    #[clap(short, long, default_value = "127.0.0.1:3000")]
+    #[clap(short, long, default_value = "0.0.0.0:3000")]
     address: String,
 }
 
@@ -51,12 +52,14 @@ async fn main() {
 
     let addr: SocketAddr = args.address.parse().expect("Can't parse provided address");
 
-    let (broadcast_tx, _) = broadcast::channel(100);
+    let (tx_to_slaves, _) = broadcast::channel(100);
+    let (tx_to_listeners, _) = broadcast::channel(100);
 
     let app_state = Arc::new(AppState {
         slaves_id_order: Mutex::new(Vec::new()),
         request_queue: Mutex::new(Vec::new()),
-        broadcast_tx,
+        tx_to_slaves,
+        tx_to_listeners,
     });
 
     let app = Router::new()
@@ -83,10 +86,17 @@ async fn websocket_handler(
 }
 
 async fn websocket(stream: WebSocket, state: Arc<AppState>) {
-    let (mut tx, mut rx) = stream.split();
+    let (mut tx_to_client, mut rx_from_client) = stream.split();
 
-    if let Some(Ok(ws::Message::Text(msg))) = rx.next().await {
-        if msg == "slave" {
+    let msg = if let Some(Ok(ws::Message::Text(msg))) = rx_from_client.next().await {
+        msg
+    } else {
+        warn!("Error with unknown client");
+        return;
+    };
+
+    match msg.as_str() {
+        "slave" => {
             let slave_id = {
                 // On utilise ce bloc pour drop le mutex le plus tôt possible
                 let mut slaves_id_order = state.slaves_id_order.lock().unwrap();
@@ -98,13 +108,13 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>) {
             info!("Slave connected with id = {}", slave_id);
 
             tokio::spawn(master_to_slave_relay_task(
-                state.broadcast_tx.subscribe(),
+                state.tx_to_slaves.subscribe(),
                 Arc::clone(&state),
                 slave_id,
-                tx,
+                tx_to_client,
             ));
 
-            slave_listening_task(rx, slave_id, &state).await;
+            slave_listening_task(rx_from_client, slave_id, &state).await;
 
             state
                 .slaves_id_order
@@ -113,49 +123,119 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>) {
                 .retain(|&id| id != slave_id);
 
             info!("Slave {} disconnected", slave_id);
+        }
+        "queue length" => {
+            info!("Listener connected");
 
-            // Arrêt de la tâche d'écoute de l'esclave associé
-            if let Err(err) = state
-                .broadcast_tx
-                .send(Message::SlaveDisconnected(slave_id))
-            {
-                warn!("Can't broadcast: {}", err)
-            };
-        } else {
+            let mut rx = state.tx_to_listeners.subscribe();
+
+            tokio::spawn(async move {
+                while let Ok(new_size) = rx.recv().await {
+                    if let Err(err) = tx_to_client
+                        .send(ws::Message::Binary(new_size.to_be_bytes().to_vec()))
+                        .await
+                    {
+                        // Permet de jeter cette tâche qui ne sert plus
+                        // car le listener n'est plus connecté
+                        warn!("Can't send to listener: {}", err);
+                        break;
+                    }
+                }
+            });
+
+            while let Some(Ok(msg)) = rx_from_client.next().await {
+                match msg {
+                    ws::Message::Close(_) => break,
+                    msg => warn!("Unknown message from listener: {:?}", msg),
+                }
+            }
+
+            info!("Listener disconnected");
+        }
+        "dude" => {
             info!("Dude connected");
 
-            execute_msg(msg, &state);
-
-            while let Some(Ok(msg)) = rx.next().await {
+            while let Some(Ok(msg)) = rx_from_client.next().await {
                 match msg {
                     // On est poli, on pong quand on a un ping
                     ws::Message::Ping(payload) => {
                         debug!("Ping received from dude");
-                        if tx.send(ws::Message::Pong(payload)).await.is_err() {
+                        if tx_to_client.send(ws::Message::Pong(payload)).await.is_err() {
                             break;
                         }
                     }
-                    ws::Message::Text(msg) => execute_msg(msg, &state),
+                    ws::Message::Text(msg) => match ToSlaveMessage::try_from(msg.as_str()) {
+                        Ok(message) => {
+                            info!("Dude wants to {:?}", message);
+
+                            match message {
+                                ToSlaveMessage::Search(hash, range) => {
+                                    let mut request_queue = state.request_queue.lock().unwrap();
+
+                                    if request_queue.is_empty() {
+                                        broadcast_message(
+                                            &state.tx_to_slaves,
+                                            ToSlaveMessage::Search(hash.clone(), range.clone()),
+                                        );
+                                    } else {
+                                        debug!("Search request pushed to queue");
+                                    }
+
+                                    request_queue.push((hash, range));
+
+                                    broadcast_message(&state.tx_to_listeners, request_queue.len())
+                                }
+                                ToSlaveMessage::Stop => {
+                                    let mut request_queue = state.request_queue.lock().unwrap();
+                                    if !request_queue.is_empty() {
+                                        request_queue.remove(0);
+
+                                        broadcast_message(
+                                            &state.tx_to_listeners,
+                                            request_queue.len(),
+                                        );
+
+                                        broadcast_message(&state.tx_to_slaves, message);
+
+                                        if !request_queue.is_empty() {
+                                            info!("Sending queued request: {:?}", request_queue[0]);
+
+                                            let (hash, range) = &request_queue[0];
+                                            broadcast_message(
+                                                &state.tx_to_slaves,
+                                                ToSlaveMessage::Search(hash.clone(), range.clone()),
+                                            );
+                                        }
+                                    } else {
+                                        warn!("Nothing to stop")
+                                    }
+                                }
+                                message => broadcast_message(&state.tx_to_slaves, message),
+                            }
+                        }
+                        Err(err) => warn!("{:?}", err),
+                    },
                     _ => warn!("Non textual message from dude: {:?}", msg),
                 }
             }
 
             info!("Dude disconnected")
         }
-    } else {
-        warn!("Error with unknown client");
+        msg => {
+            warn!("Unknown type provided: {}", msg)
+        }
     }
 }
 
 async fn master_to_slave_relay_task(
-    mut broadcast_rx: broadcast::Receiver<Message>,
+    mut rx_from_master: broadcast::Receiver<ToSlaveMessage>,
     state_clone: Arc<AppState>,
     slave_id: u32,
-    mut tx: SplitSink<WebSocket, ws::Message>,
+    mut tx_to_slave: SplitSink<WebSocket, ws::Message>,
 ) {
-    while let Ok(msg) = broadcast_rx.recv().await {
+    while let Ok(msg) = rx_from_master.recv().await {
         let text = match msg {
-            Message::Search(hash, range) => {
+            ToSlaveMessage::Search(hash, range) => {
                 let (begin, end) = (range.start, range.end);
                 let slaves_id_order = state_clone.slaves_id_order.lock().unwrap();
                 let slaves_count = slaves_id_order.len();
@@ -186,18 +266,12 @@ async fn master_to_slave_relay_task(
                     get_word_from_number(slave_end)
                 )
             }
-            Message::Stop => "stop".to_owned(),
-            Message::Exit => "exit".to_owned(),
-            Message::SlaveDisconnected(id) => {
-                if id == slave_id {
-                    break;
-                } else {
-                    continue;
-                }
-            }
+            ToSlaveMessage::Stop => "stop".to_owned(),
+            ToSlaveMessage::Exit => "exit".to_owned(),
         };
         // arrêt de la boucle à la moindre erreur
-        if tx.send(ws::Message::Text(text)).await.is_err() {
+        if let Err(err) = tx_to_slave.send(ws::Message::Text(text)).await {
+            warn!("Can't send to slave: {}", err);
             break;
         }
     }
@@ -222,23 +296,22 @@ async fn slave_listening_task(
                             "Slave {} found the word {} behind the hash {}. Now stopping all slaves...",
                             slave_id, word, hash
                         );
-
-                        if let Err(err) = state.broadcast_tx.send(Message::Stop) {
-                            warn!("Can't broadcast: {}", err)
-                        }
+                        broadcast_message(&state.tx_to_slaves, ToSlaveMessage::Stop);
 
                         let mut request_queue = state.request_queue.lock().unwrap();
+
                         request_queue.remove(0);
+
+                        broadcast_message(&state.tx_to_listeners, request_queue.len());
+
                         if !request_queue.is_empty() {
                             info!("Sending queued request: {:?}", request_queue[0]);
 
                             let (hash, range) = &request_queue[0];
-                            if let Err(err) = state
-                                .broadcast_tx
-                                .send(Message::Search(hash.clone(), range.clone()))
-                            {
-                                warn!("Can't broadcast: {}", err)
-                            }
+                            broadcast_message(
+                                &state.tx_to_slaves,
+                                ToSlaveMessage::Search(hash.clone(), range.clone()),
+                            );
                         }
                     }
                     _ => warn!("Unknown request from slave {}: {}", slave_id, msg),
@@ -252,31 +325,9 @@ async fn slave_listening_task(
     }
 }
 
-fn execute_msg(msg: String, state: &Arc<AppState>) {
-    match Message::try_from(msg.as_str()) {
-        Ok(message) => {
-            info!("Dude wants to {:?}", message);
-
-            if let Message::Search(hash, range) = message {
-                let mut request_queue = state.request_queue.lock().unwrap();
-
-                if request_queue.is_empty() {
-                    if let Err(err) = state
-                        .broadcast_tx
-                        .send(Message::Search(hash.clone(), range.clone()))
-                    {
-                        warn!("Can't broadcast: {}", err)
-                    }
-                } else {
-                    debug!("Search request pushed to queue");
-                }
-
-                request_queue.push((hash, range))
-            } else if let Err(err) = state.broadcast_tx.send(message) {
-                warn!("Can't broadcast: {}", err)
-            }
-        }
-        Err(err) => warn!("{:?}", err),
+fn broadcast_message<T>(tx: &broadcast::Sender<T>, message: T) {
+    if let Err(err) = tx.send(message) {
+        warn!("Can't broadcast: {}", err)
     }
 }
 
