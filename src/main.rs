@@ -105,10 +105,28 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>) {
                 id // En Rust, faire cela permet de faire "retourner" une valeur à partir du bloc
             };
 
-            info!("Slave connected with id = {}", slave_id);
+            info!("Slave connected with id = {}, restarting task...", slave_id);
+
+            // on stoppe tout le monde pour repartager la tâche avec le nouveau
+            broadcast_message(&state.tx_to_slaves, ToSlaveMessage::Stop);
+
+            // on crée le receveur avant d'envoyer un potentiel message de recherche
+            let rx_from_master = state.tx_to_slaves.subscribe();
+
+            {
+                // On utilise ce bloc pour drop le mutex le plus tôt possible
+                let request_queue = state.request_queue.lock().unwrap();
+                if !request_queue.is_empty() {
+                    let (hash, range) = &request_queue[0];
+                    broadcast_message(
+                        &state.tx_to_slaves,
+                        ToSlaveMessage::Search(hash.clone(), range.clone()),
+                    )
+                }
+            }
 
             tokio::spawn(master_to_slave_relay_task(
-                state.tx_to_slaves.subscribe(),
+                rx_from_master,
                 Arc::clone(&state),
                 slave_id,
                 tx_to_client,
@@ -122,7 +140,19 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>) {
                 .unwrap()
                 .retain(|&id| id != slave_id);
 
+            // on stoppe tout le monde pour repartager la tâche avec les esclaves restants
+            broadcast_message(&state.tx_to_slaves, ToSlaveMessage::Stop);
+
             info!("Slave {} disconnected", slave_id);
+
+            let request_queue = state.request_queue.lock().unwrap();
+            if !request_queue.is_empty() {
+                let (hash, range) = &request_queue[0];
+                broadcast_message(
+                    &state.tx_to_slaves,
+                    ToSlaveMessage::Search(hash.clone(), range.clone()),
+                )
+            }
         }
         "queue length" => {
             info!("Listener connected");
