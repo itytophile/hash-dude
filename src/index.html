@@ -1,54 +1,81 @@
 <!DOCTYPE html>
 <html lang="en">
-
-<head>
-    <meta charset="UTF-8">
+  <head>
+    <meta charset="UTF-8" />
     <title>Websocket Chat</title>
-</head>
+    <link rel="stylesheet" href="/css" />
+  </head>
 
-<body>
-    <h1>Websocket Chat Example</h1>
+  <body>
+    <section class="section">
+      <div class="container">
+        <div class="field is-horizontal">
+          <div class="field-body">
+            <div class="field">
+              <p class="control">
+                <input
+                  id="hashInput"
+                  class="input"
+                  type="text"
+                  placeholder="Hash to crack"
+                />
+              </p>
+            </div>
+            <div class="field">
+              <p class="control">
+                <input
+                  id="beginInput"
+                  class="input"
+                  type="text"
+                  placeholder="Begin"
+                />
+              </p>
+            </div>
+            <div class="field">
+              <p class="control">
+                <input
+                  id="endInput"
+                  class="input"
+                  type="text"
+                  placeholder="End"
+                />
+              </p>
+            </div>
 
-    <input id="username" style="display:block; width:100px; box-sizing: border-box" type="text" placeholder="username">
-    <button id="join-btn" type="button">Join Chat</button>
-    <textarea id="chat" style="display:block; width:600px; height:400px; box-sizing: border-box" cols="30"
-        rows="10"></textarea>
-    <input id="input" style="display:block; width:600px; box-sizing: border-box" type="text" placeholder="chat">
+            <div class="field">
+              <div class="control">
+                <button id="searchButton" class="button is-link" disabled>
+                  Search
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
 
     <script>
-        const username = document.getElementById("username");
-        const join_btn = document.getElementById("join-btn");
-        const textarea = document.getElementById("chat");
-        const input = document.getElementById("input");
+      const searchButton = document.getElementById("searchButton");
+      const hashInput = document.getElementById("hashInput");
+      const beginInput = document.getElementById("beginInput");
+      const endInput = document.getElementById("endInput");
 
-        join_btn.onclick = (e) => {
-            join_btn.disabled = true;
+      const ws = new WebSocket(`ws://${window.location.host}/ws`);
 
-            const websocket = new WebSocket(`ws://${window.location.host}/ws`);
+      ws.onopen = () => {
+        ws.send("dude");
+        searchButton.disabled = false;
+      };
 
-            websocket.onopen = () => {
-                console.log("connection opened");
-                websocket.send(username.value);
-            }
+      ws.onclose = () => {
+        searchButton.disabled = true;
+      };
 
-            websocket.onclose = () => {
-                console.log("connection closed");
-                join_btn.disabled = false;
-            }
-
-            websocket.onmessage = (e) => {
-                console.log("received message: " + e.data);
-                textarea.value += e.data + "\r\n";
-            }
-
-            input.onkeydown = (e) => {
-                if (e.key == "Enter") {
-                    websocket.send(input.value);
-                    input.value = "";
-                }
-            }
-        }
+      searchButton.onclick = () => {
+        ws.send(
+          `search ${hashInput.value} ${beginInput.value} ${endInput.value}`
+        );
+      };
     </script>
-</body>
-
+  </body>
 </html>

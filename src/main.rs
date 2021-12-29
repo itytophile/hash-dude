@@ -2,11 +2,13 @@ mod msg;
 
 use alphabet::get_word_from_number;
 use axum::{
+    body::{boxed, Full},
     extract::{
         ws::{self, WebSocket, WebSocketUpgrade},
         Extension, TypedHeader,
     },
-    response::{Html, IntoResponse},
+    http::header,
+    response::{Html, IntoResponse, Response},
     routing::get,
     AddExtensionLayer, Router,
 };
@@ -15,6 +17,7 @@ use futures::{
     sink::SinkExt,
     stream::{SplitSink, SplitStream, StreamExt},
 };
+use headers::HeaderValue;
 use msg::ToSlaveMessage;
 use std::{
     net::SocketAddr,
@@ -64,6 +67,7 @@ async fn main() {
 
     let app = Router::new()
         .route("/", get(index))
+        .route("/css", get(css))
         .route("/ws", get(websocket_handler))
         .layer(AddExtensionLayer::new(app_state));
 
@@ -361,7 +365,20 @@ fn broadcast_message<T>(tx: &broadcast::Sender<T>, message: T) {
     }
 }
 
-// Include utf-8 file at **compile** time.
 async fn index() -> Html<&'static str> {
-    Html(std::include_str!("index.html"))
+    // Le include_str! est une macro qui permet de charger un fichier
+    // à la compilation (le texte sera directement dans le binaire)
+    Html(include_str!("index.html"))
+}
+
+async fn css() -> Response {
+    // Obligé de faire ça pour bien dire que c'est du css
+    // au lieu d'envoyer direct du text/plain
+    Response::builder()
+        .header(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static(mime::TEXT_CSS_UTF_8.as_ref()),
+        )
+        .body(boxed(Full::from(include_str!("bulma.min.css"))))
+        .unwrap()
 }
