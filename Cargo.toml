@@ -31,7 +31,7 @@ url = "2"
 futures-util = "0.3"
 md-5 = "0.10"
 hex = "0.4"
-clap = { version = "3.0.0-rc.8", features = ["derive"] }
+clap = { version = "3.0", features = ["derive"] }
 mime = "0.3"
 
 [profile.release]
