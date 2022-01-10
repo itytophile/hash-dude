@@ -61,100 +61,114 @@ async fn main() {
     }
     use TxOrTask::*;
     let mut tx_or_task = Tx(tx_to_master);
-    while let Some(Ok(msg)) = rx.next().await {
-        match msg {
-            Message::Text(msg) => {
-                let split: Vec<&str> = msg.split(' ').collect();
-                match split.as_slice() {
-                    &["search", hash_to_crack, begin, end] => {
-                        info!("Search request from master");
+    loop {
+        match rx.next().await {
+            Some(Ok(msg)) => {
+                match msg {
+                    Message::Text(msg) => {
+                        let split: Vec<&str> = msg.split(' ').collect();
+                        match split.as_slice() {
+                            &["search", hash_to_crack, begin, end] => {
+                                info!("Search request from master");
 
-                        let hash_hex_bytes = match hex::decode(hash_to_crack) {
-                            Ok(bytes) => bytes,
-                            Err(err) => {
-                                warn!("Problem with hash: {}", err);
-                                continue;
+                                let hash_hex_bytes = match hex::decode(hash_to_crack) {
+                                    Ok(bytes) => bytes,
+                                    Err(err) => {
+                                        warn!("Problem with hash: {}", err);
+                                        continue;
+                                    }
+                                };
+
+                                let (begin_num, end_num) = match (
+                                    get_number_from_word(begin),
+                                    get_number_from_word(end),
+                                ) {
+                                    (Ok(begin_num), Ok(end_num)) => (begin_num, end_num),
+                                    (Ok(_), Err(err)) => {
+                                        warn!("Problem with end word: {}", err);
+                                        continue;
+                                    }
+                                    (Err(err), Ok(_)) => {
+                                        warn!("Problem with begin word: {}", err);
+                                        continue;
+                                    }
+                                    (Err(err0), Err(err1)) => {
+                                        warn!("Problem with both words: {};{}", err0, err1);
+                                        continue;
+                                    }
+                                };
+
+                                if begin_num >= end_num {
+                                    warn!("Begin word greater or equal than end word, no need to continue");
+                                    continue;
+                                }
+
+                                debug!(
+                                    "{} word(s) in range [{};{})",
+                                    end_num - begin_num,
+                                    begin,
+                                    end
+                                );
+
+                                let tx_to_master = match tx_or_task {
+                                    Tx(tx) => tx,
+                                    Task(task) => {
+                                        info!("Recovering from previous search (stop if still running)...");
+                                        tx_stop_search.send(true).unwrap();
+                                        task.await.unwrap()
+                                    }
+                                };
+
+                                info!(
+                                    "Now cracking {} in range [{}; {})...",
+                                    hash_to_crack, begin, end
+                                );
+
+                                // On met le Stop à false avant chaque lancée
+                                tx_stop_search.send(false).unwrap();
+
+                                tx_or_task = Task(tokio::spawn(crack_hash(
+                                    begin_num..end_num,
+                                    hash_hex_bytes,
+                                    hash_to_crack.to_owned(),
+                                    tx_to_master,
+                                    rx_stop_search.clone(),
+                                )));
                             }
-                        };
-
-                        let (begin_num, end_num) =
-                            match (get_number_from_word(begin), get_number_from_word(end)) {
-                                (Ok(begin_num), Ok(end_num)) => (begin_num, end_num),
-                                (Ok(_), Err(err)) => {
-                                    warn!("Problem with end word: {}", err);
-                                    continue;
-                                }
-                                (Err(err), Ok(_)) => {
-                                    warn!("Problem with begin word: {}", err);
-                                    continue;
-                                }
-                                (Err(err0), Err(err1)) => {
-                                    warn!("Problem with both words: {};{}", err0, err1);
-                                    continue;
-                                }
-                            };
-
-                        if begin_num >= end_num {
-                            warn!("Begin word greater or equal than end word, no need to continue");
-                            continue;
+                            ["stop"] => {
+                                tx_or_task = match tx_or_task {
+                                    Tx(tx) => {
+                                        info!("No search task to stop");
+                                        Tx(tx)
+                                    }
+                                    Task(task) => {
+                                        info!("Stop request from master, aborting...");
+                                        tx_stop_search.send(true).unwrap();
+                                        let tx = task.await.unwrap();
+                                        info!("Aborted");
+                                        Tx(tx)
+                                    }
+                                };
+                            }
+                            ["exit"] => {
+                                info!("Exit request from master, exiting...");
+                                tx_stop_search.send(true).unwrap();
+                                break;
+                            }
+                            _ => warn!("Unknown request from master: {}", msg),
                         }
-
-                        debug!(
-                            "{} word(s) in range [{};{})",
-                            end_num - begin_num,
-                            begin,
-                            end
-                        );
-
-                        let tx_to_master = match tx_or_task {
-                            Tx(tx) => tx,
-                            Task(task) => {
-                                info!("Recovering from previous search (stop if still running)...");
-                                tx_stop_search.send(true).unwrap();
-                                task.await.unwrap()
-                            }
-                        };
-
-                        info!(
-                            "Now cracking {} in range [{}; {})...",
-                            hash_to_crack, begin, end
-                        );
-
-                        // On met le Stop à false avant chaque lancée
-                        tx_stop_search.send(false).unwrap();
-
-                        tx_or_task = Task(tokio::spawn(crack_hash(
-                            begin_num..end_num,
-                            hash_hex_bytes,
-                            hash_to_crack.to_owned(),
-                            tx_to_master,
-                            rx_stop_search.clone(),
-                        )));
                     }
-                    ["stop"] => {
-                        tx_or_task = match tx_or_task {
-                            Tx(tx) => {
-                                info!("No search task to stop");
-                                Tx(tx)
-                            }
-                            Task(task) => {
-                                info!("Stop request from master, aborting...");
-                                tx_stop_search.send(true).unwrap();
-                                let tx = task.await.unwrap();
-                                info!("Aborted");
-                                Tx(tx)
-                            }
-                        };
-                    }
-                    ["exit"] => {
-                        info!("Exit request from master, exiting...");
-                        tx_stop_search.send(true).unwrap();
-                        break;
-                    }
-                    _ => warn!("Unknown request from master: {}", msg),
+                    _ => warn!("Non textual message from master: {:?}", msg),
                 }
             }
-            _ => warn!("Non textual message from master: {:?}", msg),
+            Some(Err(err)) => {
+                error!("{}", err);
+                break;
+            }
+            None => {
+                info!("Channel closed without error.");
+                break;
+            }
         }
     }
 }
