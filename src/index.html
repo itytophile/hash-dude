@@ -42,33 +42,57 @@
               </p>
             </div>
 
-            <div class="field">
+            <div class="field buttons">
               <div class="control">
                 <button id="searchButton" class="button is-link" disabled>
                   Search
+                </button>
+                <button id="stopButton" class="button is-warning" disabled>
+                  Stop
+                </button>
+                <button id="exitButton" class="button is-danger" disabled>
+                  Exit
                 </button>
               </div>
             </div>
           </div>
         </div>
+        <div id="messages"></div>
       </div>
     </section>
 
     <script>
       const searchButton = document.getElementById("searchButton");
+      const stopButton = document.getElementById("stopButton");
+      const exitButton = document.getElementById("exitButton");
       const hashInput = document.getElementById("hashInput");
       const beginInput = document.getElementById("beginInput");
       const endInput = document.getElementById("endInput");
+      const messages = document.getElementById("messages");
+
+      const buttons = [searchButton, stopButton, exitButton];
 
       const ws = new WebSocket(`ws://${window.location.host}/ws`);
 
       ws.onopen = () => {
         ws.send("dude");
-        searchButton.disabled = false;
+        buttons.forEach((button) => (button.disabled = false));
       };
 
       ws.onclose = () => {
-        searchButton.disabled = true;
+        buttons.forEach((button) => (button.disabled = true));
+      };
+
+      ws.onmessage = (e) => {
+        const split = e.data.split(" ");
+
+        switch (split[0]) {
+          case "found":
+            messages.appendChild(getMessageElement(split[2], split[1]));
+            break;
+          case "info":
+            messages.appendChild(getMessageElement(split.slice(1).join(" ")));
+        }
       };
 
       searchButton.onclick = () => {
@@ -76,6 +100,43 @@
           `search ${hashInput.value} ${beginInput.value} ${endInput.value}`
         );
       };
+
+      stopButton.onclick = () => {
+        ws.send("stop");
+      };
+
+      exitButton.onclick = () => {
+        ws.send("exit");
+      };
+
+      function getMessageElement(body, head) {
+        const article = document.createElement("article");
+        article.classList = ["message is-primary"];
+
+        if (head !== undefined) {
+          const div = document.createElement("div");
+          div.classList = ["message-header"];
+          const p = document.createElement("p");
+          p.textContent = head;
+          div.appendChild(p);
+          const button = document.createElement("button");
+          button.onclick = () => messages.removeChild(article);
+          button.classList = ["delete"];
+          button.ariaLabel = "delete";
+          div.appendChild(button);
+          article.appendChild(div);
+        } else {
+          article.onclick = () => messages.removeChild(article);
+        }
+
+        const div = document.createElement("div");
+        div.classList = ["message-body"];
+        div.textContent = body;
+
+        article.appendChild(div);
+
+        return article;
+      }
     </script>
   </body>
 </html>

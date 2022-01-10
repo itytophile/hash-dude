@@ -23,7 +23,7 @@ use std::{
     net::SocketAddr,
     sync::{Arc, Mutex},
 };
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, mpsc};
 use tracing::{debug, info, warn, Level};
 
 // Our shared state
@@ -32,6 +32,7 @@ struct AppState {
     request_queue: Mutex<Vec<(String, std::ops::Range<usize>)>>,
     tx_to_slaves: broadcast::Sender<ToSlaveMessage>,
     tx_to_listeners: broadcast::Sender<usize>,
+    tx_to_dudes: broadcast::Sender<String>,
 }
 
 #[derive(Parser, Debug)]
@@ -57,12 +58,14 @@ async fn main() {
 
     let (tx_to_slaves, _) = broadcast::channel(100);
     let (tx_to_listeners, _) = broadcast::channel(100);
+    let (tx_to_dudes, _) = broadcast::channel(100);
 
     let app_state = Arc::new(AppState {
         slaves_id_order: Mutex::new(Vec::new()),
         request_queue: Mutex::new(Vec::new()),
         tx_to_slaves,
         tx_to_listeners,
+        tx_to_dudes,
     });
 
     let app = Router::new()
@@ -189,12 +192,48 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>) {
         "dude" => {
             info!("Dude connected");
 
+            let mut rx = state.tx_to_dudes.subscribe();
+
+            // On ne peut pas utiliser le tx_to_client dans plusieurs tâches
+            // nous devons "emballer" ce tx dans un mpsc (multi producer single consumer)
+            // pour multiplier des tx (tx_proxy dans notre cas)
+            let (tx_proxy, mut rx_proxy) = mpsc::channel::<ws::Message>(100);
+
+            // La tâche du proxy
+            tokio::spawn(async move {
+                while let Some(message_to_dude) = rx_proxy.recv().await {
+                    if let Err(err) = tx_to_client.send(message_to_dude).await {
+                        warn!("Can't send to dude: {}", err);
+                        break;
+                    }
+                }
+            });
+
+            // La tâche qui écoute les messages pour tous les dudes
+            {
+                // On ouvre des accolades pour shadow tranquillement tx_proxy
+                // C'est pour le style, pour éviter de marquer let tx_proxy_clone = tx_proxy.clone()
+                // à la sortie des accolades on va retrouver le tx_proxy originel non cloné
+                let tx_proxy = tx_proxy.clone();
+                tokio::spawn(async move {
+                    while let Ok(message_to_dude) = rx.recv().await {
+                        if let Err(err) = tx_proxy.send(ws::Message::Text(message_to_dude)).await {
+                            // Permet de jeter cette tâche qui ne sert plus
+                            // car le listener n'est plus connecté
+                            warn!("Can't send to proxy: {}", err);
+                            break;
+                        }
+                    }
+                });
+            }
+
             while let Some(Ok(msg)) = rx_from_client.next().await {
                 match msg {
                     // On est poli, on pong quand on a un ping
                     ws::Message::Ping(payload) => {
                         debug!("Ping received from dude");
-                        if tx_to_client.send(ws::Message::Pong(payload)).await.is_err() {
+                        // on utilise le tx_proxy originel non cloné
+                        if tx_proxy.send(ws::Message::Pong(payload)).await.is_err() {
                             break;
                         }
                     }
@@ -211,8 +250,26 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>) {
                                             &state.tx_to_slaves,
                                             ToSlaveMessage::Search(hash.clone(), range.clone()),
                                         );
+                                        if let Err(err) = state
+                                            .tx_to_dudes
+                                            .send(format!("info Cracking {}...", hash))
+                                        {
+                                            warn!(
+                                                "Can't tell dudes that hash is cracking: {}",
+                                                err
+                                            );
+                                        }
                                     } else {
                                         debug!("Search request pushed to queue");
+                                        if let Err(err) = state
+                                            .tx_to_dudes
+                                            .send("info Request pushed to queue".to_owned())
+                                        {
+                                            warn!(
+                                                "Can't tell dudes that request pushed to queue: {}",
+                                                err
+                                            );
+                                        }
                                     }
 
                                     request_queue.push((hash, range));
@@ -223,6 +280,16 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>) {
                                     let mut request_queue = state.request_queue.lock().unwrap();
                                     if !request_queue.is_empty() {
                                         request_queue.remove(0);
+
+                                        if let Err(err) = state
+                                            .tx_to_dudes
+                                            .send("info Task stopped succesfully".to_owned())
+                                        {
+                                            warn!(
+                                                "Can't tell dudes that the task stopped: {}",
+                                                err
+                                            );
+                                        }
 
                                         broadcast_message(
                                             &state.tx_to_listeners,
@@ -239,8 +306,24 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>) {
                                                 &state.tx_to_slaves,
                                                 ToSlaveMessage::Search(hash.clone(), range.clone()),
                                             );
+
+                                            if let Err(err) = state
+                                                .tx_to_dudes
+                                                .send(format!("info Cracking {}...", hash))
+                                            {
+                                                warn!(
+                                                    "Can't tell dudes that hash is cracking: {}",
+                                                    err
+                                                );
+                                            }
                                         }
                                     } else {
+                                        if let Err(err) = state
+                                            .tx_to_dudes
+                                            .send("info Nothing to stop".to_owned())
+                                        {
+                                            warn!("Can't tell dudes that there is nothing to stop: {}", err);
+                                        }
                                         warn!("Nothing to stop")
                                     }
                                 }
@@ -330,6 +413,12 @@ async fn slave_listening_task(
                             "Slave {} found the word {} behind the hash {}. Now stopping all slaves...",
                             slave_id, word, hash
                         );
+
+                        // on send le message tel quel. Le dude veut aussi un found <hash> <word>
+                        if let Err(err) = state.tx_to_dudes.send(msg) {
+                            warn!("Can't tell dudes that word was found: {}", err);
+                        }
+
                         broadcast_message(&state.tx_to_slaves, ToSlaveMessage::Stop);
 
                         let mut request_queue = state.request_queue.lock().unwrap();
@@ -346,6 +435,12 @@ async fn slave_listening_task(
                                 &state.tx_to_slaves,
                                 ToSlaveMessage::Search(hash.clone(), range.clone()),
                             );
+                            
+                            if let Err(err) =
+                                state.tx_to_dudes.send(format!("info Cracking {}...", hash))
+                            {
+                                warn!("Can't tell dudes that hash is cracking: {}", err);
+                            }
                         }
                     }
                     _ => warn!("Unknown request from slave {}: {}", slave_id, msg),
