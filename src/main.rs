@@ -74,7 +74,7 @@ async fn main() {
         .route("/ws", get(websocket_handler))
         .layer(AddExtensionLayer::new(app_state));
 
-    tracing::info!("Listening on {}", addr);
+    tracing::info!("Listening on {addr}");
     axum::Server::bind(&addr)
         .serve(app.into_make_service())
         .await
@@ -112,7 +112,7 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>) {
                 id // En Rust, faire cela permet de faire "retourner" une valeur à partir du bloc
             };
 
-            info!("Slave connected with id = {}, restarting task...", slave_id);
+            info!("Slave connected with id = {slave_id}, restarting task...");
 
             // on stoppe tout le monde pour repartager la tâche avec le nouveau
             broadcast_message(&state.tx_to_slaves, ToSlaveMessage::Stop);
@@ -150,7 +150,7 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>) {
             // on stoppe tout le monde pour repartager la tâche avec les esclaves restants
             broadcast_message(&state.tx_to_slaves, ToSlaveMessage::Stop);
 
-            info!("Slave {} disconnected", slave_id);
+            info!("Slave {slave_id} disconnected");
 
             let request_queue = state.request_queue.lock().unwrap();
             if !request_queue.is_empty() {
@@ -174,7 +174,7 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>) {
                     {
                         // Permet de jeter cette tâche qui ne sert plus
                         // car le listener n'est plus connecté
-                        warn!("Can't send to listener: {}", err);
+                        warn!("Can't send to listener: {err}");
                         break;
                     }
                 }
@@ -183,7 +183,7 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>) {
             while let Some(Ok(msg)) = rx_from_client.next().await {
                 match msg {
                     ws::Message::Close(_) => break,
-                    msg => warn!("Unknown message from listener: {:?}", msg),
+                    msg => warn!("Unknown message from listener: {msg:?}"),
                 }
             }
 
@@ -203,7 +203,7 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>) {
             tokio::spawn(async move {
                 while let Some(message_to_dude) = rx_proxy.recv().await {
                     if let Err(err) = tx_to_client.send(message_to_dude).await {
-                        warn!("Can't send to dude: {}", err);
+                        warn!("Can't send to dude: {err}");
                         break;
                     }
                 }
@@ -220,7 +220,7 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>) {
                         if let Err(err) = tx_proxy.send(ws::Message::Text(message_to_dude)).await {
                             // Permet de jeter cette tâche qui ne sert plus
                             // car le listener n'est plus connecté
-                            warn!("Can't send to proxy: {}", err);
+                            warn!("Can't send to proxy: {err}");
                             break;
                         }
                     }
@@ -239,7 +239,7 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>) {
                     }
                     ws::Message::Text(msg) => match ToSlaveMessage::try_from(msg.as_str()) {
                         Ok(message) => {
-                            info!("Dude wants to {:?}", message);
+                            info!("Dude wants to {message:?}");
 
                             match message {
                                 ToSlaveMessage::Search(hash, range) => {
@@ -252,12 +252,9 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>) {
                                         );
                                         if let Err(err) = state
                                             .tx_to_dudes
-                                            .send(format!("info Cracking {}...", hash))
+                                            .send(format!("info Cracking {hash}..."))
                                         {
-                                            warn!(
-                                                "Can't tell dudes that hash is cracking: {}",
-                                                err
-                                            );
+                                            warn!("Can't tell dudes that hash is cracking: {err}");
                                         }
                                     } else {
                                         debug!("Search request pushed to queue");
@@ -265,10 +262,7 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>) {
                                             .tx_to_dudes
                                             .send("info Request pushed to queue".to_owned())
                                         {
-                                            warn!(
-                                                "Can't tell dudes that request pushed to queue: {}",
-                                                err
-                                            );
+                                            warn!("Can't tell dudes that request pushed to queue: {err}");
                                         }
                                     }
 
@@ -285,10 +279,7 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>) {
                                             .tx_to_dudes
                                             .send("info Task stopped succesfully".to_owned())
                                         {
-                                            warn!(
-                                                "Can't tell dudes that the task stopped: {}",
-                                                err
-                                            );
+                                            warn!("Can't tell dudes that the task stopped: {err}");
                                         }
 
                                         broadcast_message(
@@ -309,12 +300,9 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>) {
 
                                             if let Err(err) = state
                                                 .tx_to_dudes
-                                                .send(format!("info Cracking {}...", hash))
+                                                .send(format!("info Cracking {hash}..."))
                                             {
-                                                warn!(
-                                                    "Can't tell dudes that hash is cracking: {}",
-                                                    err
-                                                );
+                                                warn!("Can't tell dudes that hash is cracking: {err}");
                                             }
                                         }
                                     } else {
@@ -322,7 +310,7 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>) {
                                             .tx_to_dudes
                                             .send("info Nothing to stop".to_owned())
                                         {
-                                            warn!("Can't tell dudes that there is nothing to stop: {}", err);
+                                            warn!("Can't tell dudes that there is nothing to stop: {err}");
                                         }
                                         warn!("Nothing to stop")
                                     }
@@ -330,16 +318,16 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>) {
                                 message => broadcast_message(&state.tx_to_slaves, message),
                             }
                         }
-                        Err(err) => warn!("{:?}", err),
+                        Err(err) => warn!("{err:?}"),
                     },
-                    _ => warn!("Non textual message from dude: {:?}", msg),
+                    _ => warn!("Non textual message from dude: {msg:?}"),
                 }
             }
 
             info!("Dude disconnected")
         }
         msg => {
-            warn!("Unknown type provided: {}", msg)
+            warn!("Unknown type provided: {msg}")
         }
     }
 }
@@ -388,13 +376,13 @@ async fn master_to_slave_relay_task(
         };
         // arrêt de la boucle à la moindre erreur
         if let Err(err) = tx_to_slave.send(ws::Message::Text(text)).await {
-            warn!("Can't send to slave: {}", err);
+            warn!("Can't send to slave: {err}");
             break;
         }
     }
     debug!(
-        "Slave {} no longer exists, stopped listening to master",
-        slave_id
+        "Slave {slave_id} no longer exists, stopped listening to master",
+        
     )
 }
 
@@ -410,13 +398,12 @@ async fn slave_listening_task(
                 match split.as_slice() {
                     ["found", hash, word] => {
                         info!(
-                            "Slave {} found the word {} behind the hash {}. Now stopping all slaves...",
-                            slave_id, word, hash
+                            "Slave {slave_id} found the word {word} behind the hash {hash}. Now stopping all slaves..."
                         );
 
                         // on send le message tel quel. Le dude veut aussi un found <hash> <word>
                         if let Err(err) = state.tx_to_dudes.send(msg) {
-                            warn!("Can't tell dudes that word was found: {}", err);
+                            warn!("Can't tell dudes that word was found: {err}");
                         }
 
                         broadcast_message(&state.tx_to_slaves, ToSlaveMessage::Stop);
@@ -437,26 +424,26 @@ async fn slave_listening_task(
                             );
                             
                             if let Err(err) =
-                                state.tx_to_dudes.send(format!("info Cracking {}...", hash))
+                                state.tx_to_dudes.send(format!("info Cracking {hash}..."))
                             {
-                                warn!("Can't tell dudes that hash is cracking: {}", err);
+                                warn!("Can't tell dudes that hash is cracking: {err}");
                             }
                         }
                     }
-                    _ => warn!("Unknown request from slave {}: {}", slave_id, msg),
+                    _ => warn!("Unknown request from slave {slave_id}: {msg}"),
                 }
             }
             ws::Message::Ping(_) => {
-                warn!("Slave {} ping'd but pong not implemented", slave_id)
+                warn!("Slave {slave_id} ping'd but pong not implemented")
             }
-            _ => warn!("Non textual message from slave {}: {:?}", slave_id, msg),
+            _ => warn!("Non textual message from slave {slave_id}: {msg:?}"),
         }
     }
 }
 
 fn broadcast_message<T>(tx: &broadcast::Sender<T>, message: T) {
     if let Err(err) = tx.send(message) {
-        warn!("Can't broadcast: {}", err)
+        warn!("Can't broadcast: {err}")
     }
 }
 

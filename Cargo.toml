@@ -3,7 +3,7 @@ name = "hash-dude"
 version = "0.1.0"
 edition = "2021"
 default-run = "server"
-license = "MIT"
+license = "Apache-2.0"
 authors = ["ityt <imran.tierce@protonmail.com>"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html

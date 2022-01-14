@@ -44,11 +44,11 @@ async fn main() {
         .send(Message::Text("slave".to_owned()))
         .await
         .unwrap_or_else(|err| {
-            error!("Can't connect to master at {}: {}", &connect_addr, err);
+            error!("Can't connect to master at {connect_addr}: {err}");
             panic!()
         });
 
-    info!("Successfully connected to master at {}", &connect_addr);
+    info!("Successfully connected to master at {connect_addr}");
 
     let (tx_stop_search, rx_stop_search) = watch::channel(false);
     // Le but du jeu sera d'échanger l'ownership de ce tx avec la tâche de recherche
@@ -74,7 +74,7 @@ async fn main() {
                                 let hash_hex_bytes = match hex::decode(hash_to_crack) {
                                     Ok(bytes) => bytes,
                                     Err(err) => {
-                                        warn!("Problem with hash: {}", err);
+                                        warn!("Problem with hash: {err}");
                                         continue;
                                     }
                                 };
@@ -85,15 +85,15 @@ async fn main() {
                                 ) {
                                     (Ok(begin_num), Ok(end_num)) => (begin_num, end_num),
                                     (Ok(_), Err(err)) => {
-                                        warn!("Problem with end word: {}", err);
+                                        warn!("Problem with end word: {err}");
                                         continue;
                                     }
                                     (Err(err), Ok(_)) => {
-                                        warn!("Problem with begin word: {}", err);
+                                        warn!("Problem with begin word: {err}");
                                         continue;
                                     }
                                     (Err(err0), Err(err1)) => {
-                                        warn!("Problem with both words: {};{}", err0, err1);
+                                        warn!("Problem with both words: {err0};{err1}");
                                         continue;
                                     }
                                 };
@@ -103,12 +103,7 @@ async fn main() {
                                     continue;
                                 }
 
-                                debug!(
-                                    "{} word(s) in range [{};{})",
-                                    end_num - begin_num,
-                                    begin,
-                                    end
-                                );
+                                debug!("{} word(s) in range [{begin};{end})", end_num - begin_num,);
 
                                 let tx_to_master = match tx_or_task {
                                     Tx(tx) => tx,
@@ -119,10 +114,7 @@ async fn main() {
                                     }
                                 };
 
-                                info!(
-                                    "Now cracking {} in range [{}; {})...",
-                                    hash_to_crack, begin, end
-                                );
+                                info!("Now cracking {hash_to_crack} in range [{begin}; {end})...");
 
                                 // On met le Stop à false avant chaque lancée
                                 tx_stop_search.send(false).unwrap();
@@ -155,14 +147,14 @@ async fn main() {
                                 tx_stop_search.send(true).unwrap();
                                 break;
                             }
-                            _ => warn!("Unknown request from master: {}", msg),
+                            _ => warn!("Unknown request from master: {msg}"),
                         }
                     }
-                    _ => warn!("Non textual message from master: {:?}", msg),
+                    _ => warn!("Non textual message from master: {msg:?}"),
                 }
             }
             Some(Err(err)) => {
-                error!("{}", err);
+                error!("{err}");
                 break;
             }
             None => {
@@ -188,14 +180,11 @@ async fn crack_hash(
         hasher.update(&word);
         let hash = hasher.finalize_reset();
         if hash.as_slice() == hash_hex_bytes {
-            info!(
-                "{} cracked! The word behind it is {}. Notifying master...",
-                hash_to_crack, word
-            );
-            tx.send(Message::Text(format!("found {} {}", hash_to_crack, word)))
+            info!("{hash_to_crack} cracked! The word behind it is {word}. Notifying master...");
+            tx.send(Message::Text(format!("found {hash_to_crack} {word}")))
                 .await
                 .unwrap_or_else(|err| {
-                    error!("Can't send message via mpsc_websocket_tx: {}", err);
+                    error!("Can't send message via mpsc_websocket_tx: {err}");
                 });
             return tx;
         }
