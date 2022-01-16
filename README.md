@@ -24,6 +24,20 @@ Before building:
 cargo vendor
 ```
 
+Then:
+
+```sh
+docker build -f docker/Dockerfile.slave -t itytophile/slave .
+```
+
+```sh
+docker build -f docker/Dockerfile.server -t itytophile/server .
+```
+
+## Why other Dockerfiles for CI?
+
+Because using cargo vendor within a runner is not easy. The CI has to update crates.io index for each build.
+
 ## Monitoring
 
 After creating the swarm:
