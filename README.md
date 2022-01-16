@@ -40,6 +40,14 @@ Because using cargo vendor within a runner is not easy. The CI has to update cra
 
 ## Monitoring
 
+Initialize the swarm:
+
+```
+docker swarm init
+```
+
+Install [websocket-client](https://pypi.org/project/websocket-client/) for Python. Yeah there is not an image for the monitor.
+
 After creating the swarm:
 
 ```sh

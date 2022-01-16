@@ -12,19 +12,19 @@ build-slave:
   tags:
     - docker
   script:
-    - docker build -f docker/Dockerfile.slave-ci -t itytophile/slave .
+    - docker build -f docker/Dockerfile.slave-ci -t itytophile/hash-slave .
 
 build-server:
   stage: build
   tags:
     - docker
   script:
-    - docker build -f docker/Dockerfile.server-ci -t itytophile/server .
+    - docker build -f docker/Dockerfile.server-ci -t itytophile/hash-server .
 
 deploy:
   stage: deploy
   tags:
     - docker
   script:
-    - docker push itytophile/slave
-    - docker push itytophile/server
+    - docker push itytophile/hash-slave
+    - docker push itytophile/hash-server
