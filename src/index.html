@@ -88,10 +88,10 @@
 
         switch (split[0]) {
           case "found":
-            messages.appendChild(getMessageElement(split[2], split[1]));
+            messages.prepend(getMessageElement(split[2], split[1]));
             break;
           case "info":
-            messages.appendChild(getMessageElement(split.slice(1).join(" ")));
+            messages.prepend(getMessageElement(split.slice(1).join(" ")));
         }
       };
 

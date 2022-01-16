@@ -302,7 +302,9 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>) {
                                                 .tx_to_dudes
                                                 .send(format!("info Cracking {hash}..."))
                                             {
-                                                warn!("Can't tell dudes that hash is cracking: {err}");
+                                                warn!(
+                                                    "Can't tell dudes that hash is cracking: {err}"
+                                                );
                                             }
                                         }
                                     } else {
@@ -315,7 +317,31 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>) {
                                         warn!("Nothing to stop")
                                     }
                                 }
-                                message => broadcast_message(&state.tx_to_slaves, message),
+                                ToSlaveMessage::Exit => {
+                                    let mut request_queue = state.request_queue.lock().unwrap();
+                                    if !request_queue.is_empty() {
+                                        request_queue.clear();
+
+                                        if let Err(err) = state
+                                            .tx_to_dudes
+                                            .send("info Tasks stopped succesfully".to_owned())
+                                        {
+                                            warn!("Can't tell dudes that the tasks stopped: {err}");
+                                        }
+
+                                        broadcast_message(
+                                            &state.tx_to_listeners,
+                                            request_queue.len(),
+                                        );
+                                    }
+                                    broadcast_message(&state.tx_to_slaves, message);
+                                    if let Err(err) = state
+                                        .tx_to_dudes
+                                        .send("info Exit request to slaves".to_owned())
+                                    {
+                                        warn!("Can't tell dudes that exit requests: {err}");
+                                    }
+                                }
                             }
                         }
                         Err(err) => warn!("{err:?}"),
@@ -380,10 +406,7 @@ async fn master_to_slave_relay_task(
             break;
         }
     }
-    debug!(
-        "Slave {slave_id} no longer exists, stopped listening to master",
-        
-    )
+    debug!("Slave {slave_id} no longer exists, stopped listening to master",)
 }
 
 async fn slave_listening_task(
@@ -422,7 +445,7 @@ async fn slave_listening_task(
                                 &state.tx_to_slaves,
                                 ToSlaveMessage::Search(hash.clone(), range.clone()),
                             );
-                            
+
                             if let Err(err) =
                                 state.tx_to_dudes.send(format!("info Cracking {hash}..."))
                             {
