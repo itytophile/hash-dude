@@ -1,0 +1,13 @@
+FROM rust:alpine AS builder
+
+RUN apk update
+RUN apk add clang musl-dev
+COPY . .
+RUN cargo build --bin slave --release
+RUN strip target/release/slave
+
+FROM busybox
+
+COPY --from=builder /target/release/slave .
+
+ENTRYPOINT ["/slave"]
