@@ -1,0 +1,30 @@
+image: docker
+
+stages:
+  - build
+  - deploy
+
+before_script:
+  - docker login -u itytophile -p $DOCKER_TOKEN
+
+build-slave:
+  stage: build
+  tags:
+    - docker
+  script:
+    - docker build -f docker/Dockerfile.slave-ci -t itytophile/slave .
+
+build-server:
+  stage: build
+  tags:
+    - docker
+  script:
+    - docker build -f docker/Dockerfile.server-ci -t itytophile/server .
+
+deploy:
+  stage: deploy
+  tags:
+    - docker
+  script:
+    - docker push itytophile/slave
+    - docker push itytophile/server
