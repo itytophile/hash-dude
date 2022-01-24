@@ -35,6 +35,14 @@ struct AppState {
     tx_to_dudes: broadcast::Sender<String>,
 }
 
+impl AppState {
+    fn send_to_dudes(&self, msg: String, err_msg: &'static str) {
+        if let Err(err) = self.tx_to_dudes.send(msg) {
+            warn!("{err_msg}: {err}");
+        }
+    }
+}
+
 #[derive(Parser, Debug)]
 #[clap(about, version, author)]
 struct Args {

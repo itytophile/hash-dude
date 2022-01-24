@@ -1,5 +1,5 @@
 use axum::extract::ws::{self, WebSocket};
-use futures::{StreamExt, stream::SplitStream};
+use futures::{stream::SplitStream, StreamExt};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
@@ -34,19 +34,16 @@ pub(crate) async fn dude_listening_task(
                                     &state.tx_to_slaves,
                                     ToSlaveMessage::Search(hash.clone(), range.clone()),
                                 );
-                                if let Err(err) =
-                                    state.tx_to_dudes.send(format!("info Cracking {hash}..."))
-                                {
-                                    warn!("Can't tell dudes that hash is cracking: {err}");
-                                }
+                                state.send_to_dudes(
+                                    format!("info Cracking {hash}..."),
+                                    "Can't tell dudes that hash is cracking",
+                                );
                             } else {
                                 debug!("Search request pushed to queue");
-                                if let Err(err) = state
-                                    .tx_to_dudes
-                                    .send("info Request pushed to queue".to_owned())
-                                {
-                                    warn!("Can't tell dudes that request pushed to queue: {err}");
-                                }
+                                state.send_to_dudes(
+                                    "info Request pushed to queue".to_owned(),
+                                    "Can't tell dudes that request pushed to queue",
+                                );
                             }
 
                             request_queue.push((hash, range));
@@ -58,12 +55,10 @@ pub(crate) async fn dude_listening_task(
                             if !request_queue.is_empty() {
                                 request_queue.remove(0);
 
-                                if let Err(err) = state
-                                    .tx_to_dudes
-                                    .send("info Task stopped succesfully".to_owned())
-                                {
-                                    warn!("Can't tell dudes that the task stopped: {err}");
-                                }
+                                state.send_to_dudes(
+                                    "info Task stopped succesfully".to_owned(),
+                                    "Can't tell dudes that the task stopped",
+                                );
 
                                 broadcast_message(&state.tx_to_listeners, request_queue.len());
 
@@ -78,18 +73,16 @@ pub(crate) async fn dude_listening_task(
                                         ToSlaveMessage::Search(hash.clone(), range.clone()),
                                     );
 
-                                    if let Err(err) =
-                                        state.tx_to_dudes.send(format!("info Cracking {hash}..."))
-                                    {
-                                        warn!("Can't tell dudes that hash is cracking: {err}");
-                                    }
+                                    state.send_to_dudes(
+                                        format!("info Cracking {hash}..."),
+                                        "Can't tell dudes that hash is cracking",
+                                    );
                                 }
                             } else {
-                                if let Err(err) =
-                                    state.tx_to_dudes.send("info Nothing to stop".to_owned())
-                                {
-                                    warn!("Can't tell dudes that there is nothing to stop: {err}");
-                                }
+                                state.send_to_dudes(
+                                    "info Nothing to stop".to_owned(),
+                                    "Can't tell dudes that there is nothing to stop",
+                                );
                                 warn!("Nothing to stop")
                             }
                         }
@@ -98,22 +91,20 @@ pub(crate) async fn dude_listening_task(
                             if !request_queue.is_empty() {
                                 request_queue.clear();
 
-                                if let Err(err) = state
-                                    .tx_to_dudes
-                                    .send("info Tasks stopped succesfully".to_owned())
-                                {
-                                    warn!("Can't tell dudes that the tasks stopped: {err}");
-                                }
+                                state.send_to_dudes(
+                                    "info Tasks stopped succesfully".to_owned(),
+                                    "Can't tell dudes that the tasks stopped",
+                                );
 
                                 broadcast_message(&state.tx_to_listeners, request_queue.len());
                             }
+
                             broadcast_message(&state.tx_to_slaves, message);
-                            if let Err(err) = state
-                                .tx_to_dudes
-                                .send("info Exit request to slaves".to_owned())
-                            {
-                                warn!("Can't tell dudes that exit requests: {err}");
-                            }
+
+                            state.send_to_dudes(
+                                "info Exit request to slaves".to_owned(),
+                                "Can't tell dudes that exit requests",
+                            );
                         }
                     }
                 }
