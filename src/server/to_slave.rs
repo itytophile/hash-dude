@@ -76,9 +76,7 @@ pub(crate) async fn slave_listening_task(
                         );
 
                         // on send le message tel quel. Le dude veut aussi un found <hash> <word>
-                        if let Err(err) = state.tx_to_dudes.send(msg) {
-                            warn!("Can't tell dudes that word was found: {err}");
-                        }
+                        state.send_to_dudes(msg, "Can't tell dudes that word was found");
 
                         broadcast_message(&state.tx_to_slaves, ToSlaveMessage::Stop);
 
@@ -97,11 +95,10 @@ pub(crate) async fn slave_listening_task(
                                 ToSlaveMessage::Search(hash.clone(), range.clone()),
                             );
 
-                            if let Err(err) =
-                                state.tx_to_dudes.send(format!("info Cracking {hash}..."))
-                            {
-                                warn!("Can't tell dudes that hash is cracking: {err}");
-                            }
+                            state.send_to_dudes(
+                                format!("info Cracking {hash}..."),
+                                "Can't tell dudes that hash is cracking",
+                            )
                         }
                     }
                     _ => warn!("Unknown request from slave {slave_id}: {msg}"),
