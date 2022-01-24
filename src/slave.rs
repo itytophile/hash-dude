@@ -1,10 +1,13 @@
 use alphabet::{get_number_from_word, get_word_from_number};
 use clap::Parser;
-use futures::{stream::SplitSink, SinkExt};
+use futures::{
+    stream::{SplitSink, SplitStream},
+    SinkExt,
+};
 use futures_util::StreamExt;
 use md5::{Digest, Md5};
 use std::ops::Range;
-use tokio::{net::TcpStream, sync::watch, task::JoinHandle};
+use tokio::{net::TcpStream, signal::unix, sync::watch, task::JoinHandle};
 use tokio_tungstenite::{
     connect_async, tungstenite::protocol::Message, MaybeTlsStream, WebSocketStream,
 };
@@ -14,6 +17,7 @@ use tracing::{debug, error, info, warn, Level};
 // je ne l'ai pas déterminé moi-même, pour rassurer le lecteur:
 // j'ai juste copié collé la valeur de sortie de ws_stream.split()
 type WebSocketSender = SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>;
+type WebSocketReceiver = SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>;
 
 #[derive(Parser, Debug)]
 #[clap(about, version, author)]
@@ -21,6 +25,16 @@ struct Args {
     #[clap(default_value = "ws://0.0.0.0:3000/ws")]
     ws_address: String,
 }
+
+// Le but du jeu sera d'échanger l'ownership de ce tx avec la tâche de recherche
+// et le main thread. On va refiler le tx à la tâche puis récupérer l'ownership
+// au retour de la tâche asynchrone. Comme l'illustre l'enum ci dessous,
+// soit on a l'handle de la tâche, soit on a le tx.
+enum TxOrTask {
+    Tx(WebSocketSender),
+    Task(JoinHandle<WebSocketSender>),
+}
+use TxOrTask::*;
 
 #[tokio::main]
 async fn main() {
@@ -38,7 +52,7 @@ async fn main() {
 
     let (ws_stream, _) = connect_async(url).await.expect("Failed to connect");
 
-    let (mut tx_to_master, mut rx) = ws_stream.split();
+    let (mut tx_to_master, rx) = ws_stream.split();
 
     tx_to_master
         .send(Message::Text("slave".to_owned()))
@@ -51,16 +65,21 @@ async fn main() {
     info!("Successfully connected to master at {connect_addr}");
 
     let (tx_stop_search, rx_stop_search) = watch::channel(false);
-    // Le but du jeu sera d'échanger l'ownership de ce tx avec la tâche de recherche
-    // et le main thread. On va refiler le tx à la tâche puis récupérer l'ownership
-    // au retour de la tâche asynchrone. Comme l'illustre l'enum ci dessous,
-    // soit on a l'handle de la tâche, soit on a le tx.
-    enum TxOrTask {
-        Tx(WebSocketSender),
-        Task(JoinHandle<WebSocketSender>),
+
+    let mut sig_term = unix::signal(unix::SignalKind::terminate()).unwrap();
+
+    tokio::select! {
+        _ = sig_term.recv() => {println!("prout")},
+        _ = listening_to_master(rx, Tx(tx_to_master), tx_stop_search, rx_stop_search) => {}
     }
-    use TxOrTask::*;
-    let mut tx_or_task = Tx(tx_to_master);
+}
+
+async fn listening_to_master(
+    mut rx: WebSocketReceiver,
+    mut tx_or_task: TxOrTask,
+    tx_stop_search: watch::Sender<bool>,
+    rx_stop_search: watch::Receiver<bool>,
+) {
     loop {
         match rx.next().await {
             Some(Ok(msg)) => {

@@ -27,11 +27,11 @@ cargo vendor
 Then:
 
 ```sh
-docker build -f docker/Dockerfile.slave -t itytophile/slave .
+docker build -f docker/Dockerfile.slave -t itytophile/hash-slave .
 ```
 
 ```sh
-docker build -f docker/Dockerfile.server -t itytophile/server .
+docker build -f docker/Dockerfile.server -t itytophile/hash-server .
 ```
 
 ## Why other Dockerfiles for CI?
