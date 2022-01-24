@@ -172,10 +172,10 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>) {
         "queue length" => {
             info!("Listener connected");
 
-            let mut rx = state.tx_to_listeners.subscribe();
+            let mut rx_from_master = state.tx_to_listeners.subscribe();
 
             tokio::spawn(async move {
-                while let Ok(new_size) = rx.recv().await {
+                while let Ok(new_size) = rx_from_master.recv().await {
                     if let Err(err) = tx_to_client
                         .send(ws::Message::Binary(new_size.to_be_bytes().to_vec()))
                         .await
