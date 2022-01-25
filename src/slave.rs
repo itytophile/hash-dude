@@ -69,7 +69,7 @@ async fn main() {
     let mut sig_term = unix::signal(unix::SignalKind::terminate()).unwrap();
 
     tokio::select! {
-        _ = sig_term.recv() => {println!("prout")},
+        _ = sig_term.recv() => {},
         _ = listening_to_master(rx, Tx(tx_to_master), tx_stop_search, rx_stop_search) => {}
     }
 }
