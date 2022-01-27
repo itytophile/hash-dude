@@ -12,15 +12,16 @@ pub fn get_word_from_number(mut num: usize) -> String {
 }
 
 // optimisation pour Mike
-pub fn get_reverse_word_from_number(mut num: usize) -> String {
-    let mut word = String::with_capacity(10);
+pub fn get_bytes_from_number(mut num: usize, buffer: &mut [u8; 10]) -> &[u8] {
+    let mut index = 9;
     loop {
-        word.push(ALPHABET[num % BASE]);
+        buffer[index] = ALPHABET[num % BASE] as u8;
         num /= BASE;
         if num == 0 {
-            break word;
+            break &buffer[index..];
         }
         num -= 1;
+        index -= 1;
     }
 }
 
@@ -32,6 +33,13 @@ pub fn get_number_from_word(word: &str) -> Result<usize, &'static str> {
             Some(index) => index,
             None => return Err("Unsupported letter in word"),
         };
+
+        if usize::MAX / (letter_index + 1) < 62_u64.pow(index as u32) as usize {
+            return Err(
+                "The word value is overflowing the usize capacity, use a smaller word please",
+            );
+        }
+
         let addition = (letter_index + 1) * 62_u64.pow(index as u32) as usize;
 
         // Pour éviter l'overflow
