@@ -1,2 +1,4 @@
 /target
 vendor/
+flamegraph.svg
+perf.data*

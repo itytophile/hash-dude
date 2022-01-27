@@ -1,4 +1,4 @@
-use alphabet::{get_number_from_word, get_word_from_number};
+use alphabet::{get_number_from_word, get_reverse_word_from_number, get_word_from_number};
 use clap::Parser;
 use futures::{
     stream::{SplitSink, SplitStream},
@@ -192,13 +192,21 @@ async fn crack_hash(
     rx_stop_search: watch::Receiver<bool>,
 ) -> WebSocketSender {
     let mut hasher = Md5::new();
-    for word in range.map(get_word_from_number) {
+    for index in range {
         if *rx_stop_search.borrow() {
             return tx;
         }
-        hasher.update(&word);
+
+        let mut bytes = get_reverse_word_from_number(index).into_bytes();
+        let len = bytes.len();
+        for i in 0..len / 2 {
+            bytes.swap(i, len - 1 - i);
+        }
+        hasher.update(bytes);
+
         let hash = hasher.finalize_reset();
         if hash.as_slice() == hash_hex_bytes {
+            let word = get_word_from_number(index);
             info!("{hash_to_crack} cracked! The word behind it is {word}. Notifying master...");
             tx.send(Message::Text(format!("found {hash_to_crack} {word}")))
                 .await

@@ -1,6 +1,6 @@
 // algo trouvé par chance
 pub fn get_word_from_number(mut num: usize) -> String {
-    let mut word = String::new();
+    let mut word = String::with_capacity(10);
     loop {
         word.insert(0, ALPHABET[num % BASE]);
         num /= BASE;
@@ -8,6 +8,19 @@ pub fn get_word_from_number(mut num: usize) -> String {
             break word;
         }
         num -= 1; // la petite douille de la chance
+    }
+}
+
+// optimisation pour Mike
+pub fn get_reverse_word_from_number(mut num: usize) -> String {
+    let mut word = String::with_capacity(10);
+    loop {
+        word.push(ALPHABET[num % BASE]);
+        num /= BASE;
+        if num == 0 {
+            break word;
+        }
+        num -= 1;
     }
 }
 
