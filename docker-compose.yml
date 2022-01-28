@@ -9,4 +9,4 @@ services:
     image: itytophile/hash-slave
     depends_on:
       - server
-    command: ws://server:3000/ws
+    command: /slave ws://server:3000/ws

@@ -7,8 +7,8 @@ RUN mkdir .cargo && cp docker/config.toml .cargo/
 RUN cargo build --bin slave --release
 RUN strip target/release/slave
 
-FROM busybox
+FROM scratch
 
 COPY --from=builder /target/release/slave .
 
-ENTRYPOINT ["/slave"]
+CMD ["/slave"]

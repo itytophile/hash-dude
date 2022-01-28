@@ -7,8 +7,8 @@ RUN mkdir .cargo && cp docker/config.toml .cargo/
 RUN cargo build --bin server --release
 RUN strip target/release/server
 
-FROM busybox
+FROM scratch
 
 COPY --from=builder /target/release/server .
 
-ENTRYPOINT ["/server"]
+CMD ["/server"]
