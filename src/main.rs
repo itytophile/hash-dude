@@ -23,7 +23,10 @@ use std::{
     net::SocketAddr,
     sync::{Arc, Mutex},
 };
-use tokio::sync::{broadcast, mpsc};
+use tokio::{
+    signal::unix,
+    sync::{broadcast, mpsc},
+};
 use tracing::{debug, info, warn, Level};
 
 // Our shared state
@@ -85,6 +88,12 @@ async fn main() {
     tracing::info!("Listening on {addr}");
     axum::Server::bind(&addr)
         .serve(app.into_make_service())
+        .with_graceful_shutdown(async {
+            unix::signal(unix::SignalKind::terminate())
+                .expect("failed to install signal handler")
+                .recv()
+                .await;
+        })
         .await
         .unwrap();
 }
