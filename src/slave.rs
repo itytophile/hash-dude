@@ -36,7 +36,7 @@ enum TxOrTask {
 }
 use TxOrTask::*;
 
-#[tokio::main]
+#[tokio::main(flavor = "current_thread")]
 async fn main() {
     if std::env::var_os("RUST_LOG").is_none() {
         tracing_subscriber::fmt()
