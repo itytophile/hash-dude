@@ -12,17 +12,43 @@ pub fn get_word_from_number(mut num: usize) -> String {
 }
 
 // optimisation pour Mike
-pub fn get_bytes_from_number(mut num: usize, buffer: &mut [u8; 10]) -> &[u8] {
-    let mut index = 9;
-    loop {
-        buffer[index] = ALPHABET[num % BASE] as u8;
+pub fn get_bytes_from_number<const N: usize>(mut num: usize, buffer: &mut [u8; N]) -> &[u8] {
+    for i in (0..N).rev() {
+        buffer[i] = ALPHABET[num % BASE] as u8;
         num /= BASE;
         if num == 0 {
-            break &buffer[index..];
+            return &buffer[i..];
         }
         num -= 1;
-        index -= 1;
     }
+    &[]
+}
+
+pub fn increment_word<const N: usize>(buffer: &mut [u8; N]) -> Option<&'_ [u8]> {
+    for i in (0..N).rev() {
+        match buffer[i] {
+            b'9' => buffer[i] = b'a',
+            0 => {
+                buffer[i] = b'a';
+                return Some(&buffer[i..N]);
+            }
+            byte => {
+                match byte {
+                    b'z' => {
+                        buffer[i] = b'A';
+                    }
+                    b'Z' => {
+                        buffer[i] = b'0';
+                    }
+                    _ => {
+                        buffer[i] += 1;
+                    }
+                };
+                break;
+            }
+        }
+    }
+    None
 }
 
 // algo trouvé aussi par chance

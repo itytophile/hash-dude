@@ -1,4 +1,4 @@
-use alphabet::{get_bytes_from_number, get_number_from_word, get_word_from_number};
+use alphabet::{get_bytes_from_number, get_number_from_word, increment_word};
 use clap::Parser;
 use futures::{
     stream::{SplitSink, SplitStream},
@@ -194,17 +194,22 @@ async fn crack_hash(
     rx_stop_search: watch::Receiver<bool>,
 ) -> WebSocketSender {
     let mut hasher = Md5::new();
-    let mut buffer: [u8; 10] = [0; 10];
+    let mut buffer = [0; 10];
+    let mut end_buffer = [0; 10];
+    let mut iteration_count = 1;
 
-    for index in range {
-        if index % ITERATIONS_WITHOUT_CHECKING == 0 && *rx_stop_search.borrow() {
+    let mut slice = get_bytes_from_number(range.start, &mut buffer);
+    let end_slice = get_bytes_from_number(range.end, &mut end_buffer);
+
+    while slice != end_slice {
+        if iteration_count % ITERATIONS_WITHOUT_CHECKING == 0 && *rx_stop_search.borrow() {
             return tx;
         }
 
-        hasher.update(get_bytes_from_number(index, &mut buffer));
+        hasher.update(slice);
 
         if hasher.finalize_reset().as_slice() == hash_hex_bytes {
-            let word = get_word_from_number(index);
+            let word = std::str::from_utf8(slice).unwrap();
             info!("{hash_to_crack} cracked! The word behind it is {word}. Notifying master...");
             tx.send(Message::Text(format!("found {hash_to_crack} {word}")))
                 .await
@@ -213,6 +218,16 @@ async fn crack_hash(
                 });
             return tx;
         }
+
+        let len = slice.len();
+
+        slice = if let Some(slice) = increment_word(&mut buffer) {
+            slice
+        } else {
+            &buffer[10 - len..]
+        };
+
+        iteration_count += 1;
     }
 
     warn!("No corresponding hash has been found in the provided range");
