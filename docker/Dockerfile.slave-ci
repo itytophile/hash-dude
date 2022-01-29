@@ -4,10 +4,8 @@ COPY . .
 RUN RUSTFLAGS='-C target-feature=+crt-static' cargo build --bin slave --release --target x86_64-unknown-linux-gnu
 RUN strip target/x86_64-unknown-linux-gnu/release/slave
 
-FROM busybox:glibc
+FROM scratch
 
 COPY --from=builder target/x86_64-unknown-linux-gnu/release/slave .
-
-RUN rm -r /bin
 
 CMD ["/slave"]

@@ -34,5 +34,8 @@ hex = "0.4"
 clap = { version = "3.0", features = ["derive"] }
 mime = "0.3"
 
+[target.'cfg(target_env = "gnu")'.dependencies]
+trust-dns-resolver = "0.20"
+
 [profile.release]
 lto = true

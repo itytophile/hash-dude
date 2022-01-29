@@ -11,7 +11,16 @@ use tokio::{net::TcpStream, signal::unix, sync::watch, task::JoinHandle};
 use tokio_tungstenite::{
     connect_async, tungstenite::protocol::Message, MaybeTlsStream, WebSocketStream,
 };
-use tracing::{debug, error, info, warn, Level};
+use tracing::{error, info, warn, Level};
+// Ces macros cfg permettent d'inclure du code en fonction de la plateforme
+// pour laquelle on compile. Quand on produit un binaire statique avec glibc,
+// le binaire n'embarque pas les biblio nécessaires pour certaines fonctionnalités
+// de networking car une de nos dépendances doit être écrite en C (glibc n'est pas recommandé
+// pour la compilation statique). La seule fonctionnalité qui manque à notre binaire
+// est de pouvoir chercher un ip à partir d'un nom de domaine. Le crate trust_dns_resolver
+// nous permet de faire cela sans l'aide de C.
+#[cfg(target_env = "gnu")]
+use trust_dns_resolver::AsyncResolver;
 
 // Le type du transmetteur qui envoie des messages au master
 // je ne l'ai pas déterminé moi-même, pour rassurer le lecteur:
@@ -39,16 +48,31 @@ use TxOrTask::*;
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
     if std::env::var_os("RUST_LOG").is_none() {
-        tracing_subscriber::fmt()
-            .with_max_level(Level::DEBUG)
-            .init();
+        tracing_subscriber::fmt().with_max_level(Level::INFO).init();
     } else {
         tracing_subscriber::fmt::init();
     }
 
     let connect_addr = Args::parse().ws_address;
 
+    #[cfg(not(target_env = "gnu"))]
     let url = url::Url::parse(&connect_addr).unwrap();
+
+    #[cfg(target_env = "gnu")]
+    let mut url = url::Url::parse(&connect_addr).unwrap();
+    #[cfg(target_env = "gnu")]
+    {
+        let resolver = AsyncResolver::tokio_from_system_conf().unwrap();
+        let ip = resolver
+            .lookup_ip(url.host_str().unwrap())
+            .await
+            .unwrap()
+            .iter()
+            .next()
+            .unwrap();
+
+        url.set_ip_host(ip).unwrap();
+    }
 
     let (ws_stream, _) = connect_async(url).await.expect("Failed to connect");
 
@@ -122,7 +146,7 @@ async fn listening_to_master(
                                     continue;
                                 }
 
-                                debug!("{} word(s) in range [{begin};{end})", end_num - begin_num,);
+                                info!("{} word(s) in range [{begin};{end})", end_num - begin_num,);
 
                                 let tx_to_master = match tx_or_task {
                                     Tx(tx) => tx,
