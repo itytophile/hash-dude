@@ -1,3 +1,9 @@
+## Images
+
+- `itytophile/hash-slave` The slave which cracks the hashes.
+- `itytophile/hash-server` The server which shares equally the ranges to each slave to crack a hash. It offers an UI at http://localhost:3000
+- `itytophile/monitor` The monitor which observes the server's request queue. It asks docker to scale the slave service replicas.
+
 ## Run the server
 
 ```sh
@@ -46,13 +52,10 @@ Initialize the swarm:
 docker swarm init
 ```
 
-Install [websocket-client](https://pypi.org/project/websocket-client/) for Python. Yeah there is not an image for the monitor.
-
 After creating the swarm:
 
 ```sh
 docker stack deploy --compose-file docker-compose.yml stackhash
-python docker/monitor.py
 ```
 
 To delete the stack:

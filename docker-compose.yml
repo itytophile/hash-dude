@@ -10,3 +10,10 @@ services:
     depends_on:
       - server
     command: /slave ws://server:3000/ws
+  monitor:
+    image: itytophile/monitor
+    depends_on:
+      - server
+    command: /monitor -a ws://server:3000/ws
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock

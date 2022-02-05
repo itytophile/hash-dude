@@ -1,0 +1,14 @@
+FROM rust:alpine AS builder
+
+RUN apk update
+RUN apk add clang musl-dev
+COPY . .
+RUN mkdir .cargo && cp docker/config.toml .cargo/
+RUN cargo build --bin monitor --release
+RUN strip target/release/monitor
+
+FROM docker:20.10.12-alpine3.15
+
+COPY --from=builder /target/release/monitor .
+
+CMD ["/monitor"]
