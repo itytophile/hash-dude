@@ -9,7 +9,7 @@ use tracing::{error, info, warn, Level};
 
 // Le type du transmetteur qui envoie des messages au master
 // je ne l'ai pas déterminé moi-même, pour rassurer le lecteur:
-// j'ai juste copié collé la valeur de sortie de ws_stream.split()
+// j'ai juste copié collé le type de sortie de ws_stream.split()
 type WebSocketReceiver = SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>;
 
 #[derive(Parser, Debug)]

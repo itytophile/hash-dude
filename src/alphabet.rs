@@ -11,7 +11,8 @@ pub fn get_word_from_number(mut num: usize) -> String {
     }
 }
 
-// optimisation pour Mike
+// Il est un peu délicat de passer des chaînes de caractères à des octets. En effet, tous les string de Rust
+// sont certifiés comme de l'UTF8 valide. Il vaut donc mieux travailler avec des octets le plus tôt possible.
 pub fn get_bytes_from_number<const N: usize>(mut num: usize, buffer: &mut [u8; N]) -> &[u8] {
     for i in (0..N).rev() {
         buffer[i] = ALPHABET[num % BASE] as u8;
@@ -24,6 +25,12 @@ pub fn get_bytes_from_number<const N: usize>(mut num: usize, buffer: &mut [u8; N
     &[]
 }
 
+// La méthode la plus rapide pour passer d'un mot à un autre. De base j'avais décidé de me contenter
+// de convertir des nombres en chaînes de caractères mais un certain camarade avec son Go vantait la vitesse
+// de son programme. J'ai été donc obligé de faire comme lui et manipuler des tableaux d'octets directement.
+// On donne une référence mutable vers un buffer à cette fonction qui va le modifier. Si on a augmenté la taille du buffer,
+// (par exemple on passe de 99 -> aaa) cette fonction renvoie le nouveau slice, sinon on ne renvoie rien.
+// Quand on a la possiblité de renvoyer "rien" on doit passer par Option.
 pub fn increment_word<const N: usize>(buffer: &mut [u8; N]) -> Option<&'_ [u8]> {
     for i in (0..N).rev() {
         match buffer[i] {

@@ -15,16 +15,16 @@ use tracing::{error, info, warn, Level};
 // Ces macros cfg permettent d'inclure du code en fonction de la plateforme
 // pour laquelle on compile. Quand on produit un binaire statique avec glibc,
 // le binaire n'embarque pas les biblio nécessaires pour certaines fonctionnalités
-// de networking car une de nos dépendances doit être écrite en C (glibc n'est pas recommandé
-// pour la compilation statique). La seule fonctionnalité qui manque à notre binaire
-// est de pouvoir chercher un ip à partir d'un nom de domaine. Le crate trust_dns_resolver
+// de networking (glibc n'est pas recommandé pour la compilation statique).
+// La seule fonctionnalité qui manque à notre binaire est de pouvoir chercher
+// un ip à partir d'un nom de domaine. Le crate trust_dns_resolver
 // nous permet de faire cela sans l'aide de C.
 #[cfg(target_env = "gnu")]
 use trust_dns_resolver::AsyncResolver;
 
 // Le type du transmetteur qui envoie des messages au master
 // je ne l'ai pas déterminé moi-même, pour rassurer le lecteur:
-// j'ai juste copié collé la valeur de sortie de ws_stream.split()
+// j'ai juste copié collé le type de ws_stream.split()
 type WebSocketSender = SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>;
 type WebSocketReceiver = SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>;
 
@@ -39,6 +39,8 @@ struct Args {
 // et le main thread. On va refiler le tx à la tâche puis récupérer l'ownership
 // au retour de la tâche asynchrone. Comme l'illustre l'enum ci dessous,
 // soit on a l'handle de la tâche, soit on a le tx.
+// Cela permet de certifier qu'il n'y a qu'une tâche qui peut utiliser
+// le sender, ce qui fait plaisir à Rust.
 enum TxOrTask {
     Tx(WebSocketSender),
     Task(JoinHandle<WebSocketSender>),
@@ -226,6 +228,9 @@ async fn crack_hash(
     let end_slice = get_bytes_from_number(range.end, &mut end_buffer);
 
     while slice != end_slice {
+        // Ce délire de compte est une optimisation. Cela permet de moins regarder le
+        // channel pour savoir si la tâche doit stopper (ce qui prend du temps). La tâche
+        // prend donc un peu plus de temps pour se stopper, mais cela ne se ressent pas.
         if iteration_count % ITERATIONS_WITHOUT_CHECKING == 0 && *rx_stop_search.borrow() {
             return tx;
         }

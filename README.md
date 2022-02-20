@@ -1,8 +1,23 @@
+# hash-dude
+
 ## Images
 
 - `itytophile/hash-slave` The slave which cracks the hashes.
 - `itytophile/hash-server` The server which shares equally the ranges to each slave to crack a hash. It offers an UI at http://localhost:3000
 - `itytophile/monitor` The monitor which observes the server's request queue. It asks docker to scale the slave service replicas.
+
+### Why is the slave linked to glibc ?
+
+glibc is harder to deal with when we do static linking however it is much faster than musl (the binary is bigger though).
+
+## Code
+
+- `src/main.rs` The server.
+- `src/server/to_dude.rs` The task that manages dudes.
+- `src/server/to_slave.rs` The task that manages slaves.
+- `src/slave.rs` The slave.
+- `src/monitor.rs` The monitor.
+- `src/alphabet.rs` Functions that help us to generate words to crack hashes.
 
 ## Run the server
 
