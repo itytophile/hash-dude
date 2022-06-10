@@ -7,7 +7,12 @@ use futures::{
 use futures_util::StreamExt;
 use md5::{Digest, Md5};
 use std::ops::Range;
-use tokio::{net::TcpStream, signal::unix, sync, sync::watch, task::JoinHandle};
+use tokio::{
+    net::TcpStream,
+    signal::unix,
+    sync::{mpsc, watch},
+    task::JoinHandle,
+};
 use tokio_tungstenite::{
     connect_async, tungstenite::protocol::Message, MaybeTlsStream, WebSocketStream,
 };
@@ -42,8 +47,8 @@ struct Args {
 // Cela permet de certifier qu'il n'y a qu'une tâche qui peut utiliser
 // le sender, ce qui fait plaisir à Rust.
 enum TxOrTask {
-    Tx(sync::mpsc::Sender<Message>),
-    Task(JoinHandle<sync::mpsc::Sender<Message>>),
+    Tx(mpsc::Sender<Message>),
+    Task(JoinHandle<mpsc::Sender<Message>>),
 }
 use TxOrTask::*;
 
@@ -88,7 +93,7 @@ async fn main() {
             panic!()
         });
 
-    let (tx_ws_proxy, rx_ws_proxy) = sync::mpsc::channel::<Message>(1);
+    let (tx_ws_proxy, rx_ws_proxy) = mpsc::channel::<Message>(1);
 
     info!("Successfully connected to master at {connect_addr}");
 
@@ -103,7 +108,7 @@ async fn main() {
     }
 }
 
-async fn ws_proxy(mut receiver: sync::mpsc::Receiver<Message>, mut tx_ws: WebSocketSender) {
+async fn ws_proxy(mut receiver: mpsc::Receiver<Message>, mut tx_ws: WebSocketSender) {
     while let Some(msg) = receiver.recv().await {
         if let Err(err) = tx_ws.send(msg).await {
             error!("{err}");
@@ -234,9 +239,9 @@ fn crack_hash(
     range: Range<usize>,
     hash_hex_bytes: Vec<u8>,
     hash_to_crack: String,
-    tx: sync::mpsc::Sender<Message>,
+    tx: mpsc::Sender<Message>,
     rx_stop_search: watch::Receiver<bool>,
-) -> sync::mpsc::Sender<Message> {
+) -> mpsc::Sender<Message> {
     let mut hasher = Md5::new();
     let mut buffer = [0; 10];
     let mut end_buffer = [0; 10];
