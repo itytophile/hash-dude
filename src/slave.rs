@@ -7,7 +7,7 @@ use futures::{
 use futures_util::StreamExt;
 use md5::{Digest, Md5};
 use std::ops::Range;
-use tokio::{net::TcpStream, signal::unix, sync::watch, task::JoinHandle};
+use tokio::{net::TcpStream, signal::unix, sync, sync::watch, task::JoinHandle};
 use tokio_tungstenite::{
     connect_async, tungstenite::protocol::Message, MaybeTlsStream, WebSocketStream,
 };
@@ -42,12 +42,12 @@ struct Args {
 // Cela permet de certifier qu'il n'y a qu'une tâche qui peut utiliser
 // le sender, ce qui fait plaisir à Rust.
 enum TxOrTask {
-    Tx(WebSocketSender),
-    Task(JoinHandle<WebSocketSender>),
+    Tx(sync::mpsc::Sender<Message>),
+    Task(JoinHandle<sync::mpsc::Sender<Message>>),
 }
 use TxOrTask::*;
 
-#[tokio::main]
+#[tokio::main(flavor = "current_thread")]
 async fn main() {
     if std::env::var_os("RUST_LOG").is_none() {
         tracing_subscriber::fmt().with_max_level(Level::INFO).init();
@@ -88,6 +88,8 @@ async fn main() {
             panic!()
         });
 
+    let (tx_ws_proxy, rx_ws_proxy) = sync::mpsc::channel::<Message>(1);
+
     info!("Successfully connected to master at {connect_addr}");
 
     let (tx_stop_search, rx_stop_search) = watch::channel(false);
@@ -96,7 +98,17 @@ async fn main() {
 
     tokio::select! {
         _ = sig_term.recv() => {},
-        _ = listening_to_master(rx, Tx(tx_to_master), tx_stop_search, rx_stop_search) => {}
+        _ = ws_proxy(rx_ws_proxy, tx_to_master) => {},
+        _ = listening_to_master(rx, Tx(tx_ws_proxy), tx_stop_search, rx_stop_search) => {}
+    }
+}
+
+async fn ws_proxy(mut receiver: sync::mpsc::Receiver<Message>, mut tx_ws: WebSocketSender) {
+    while let Some(msg) = receiver.recv().await {
+        if let Err(err) = tx_ws.send(msg).await {
+            error!("{err}");
+            return;
+        }
     }
 }
 
@@ -164,13 +176,19 @@ async fn listening_to_master(
                                 // On met le Stop à false avant chaque lancée
                                 tx_stop_search.send(false).unwrap();
 
-                                tx_or_task = Task(tokio::spawn(crack_hash(
-                                    begin_num..end_num,
-                                    hash_hex_bytes,
-                                    hash_to_crack.to_owned(),
-                                    tx_to_master,
-                                    rx_stop_search.clone(),
-                                )));
+                                let rx_stop_search = rx_stop_search.clone();
+                                let hash_to_crack = hash_to_crack.to_owned();
+
+                                // This is a CPU bound task so we have to use spawn_blocking
+                                tx_or_task = Task(tokio::task::spawn_blocking(move || {
+                                    crack_hash(
+                                        begin_num..end_num,
+                                        hash_hex_bytes,
+                                        hash_to_crack,
+                                        tx_to_master,
+                                        rx_stop_search,
+                                    )
+                                }));
                             }
                             ["stop"] => {
                                 tx_or_task = match tx_or_task {
@@ -212,13 +230,13 @@ async fn listening_to_master(
 
 const ITERATIONS_WITHOUT_CHECKING: usize = 100000;
 
-async fn crack_hash(
+fn crack_hash(
     range: Range<usize>,
     hash_hex_bytes: Vec<u8>,
     hash_to_crack: String,
-    mut tx: WebSocketSender,
+    tx: sync::mpsc::Sender<Message>,
     rx_stop_search: watch::Receiver<bool>,
-) -> WebSocketSender {
+) -> sync::mpsc::Sender<Message> {
     let mut hasher = Md5::new();
     let mut buffer = [0; 10];
     let mut end_buffer = [0; 10];
@@ -240,8 +258,7 @@ async fn crack_hash(
         if hasher.finalize_reset().as_slice() == hash_hex_bytes {
             let word = std::str::from_utf8(slice).unwrap();
             info!("{hash_to_crack} cracked! The word behind it is {word}. Notifying master...");
-            tx.send(Message::Text(format!("found {hash_to_crack} {word}")))
-                .await
+            tx.blocking_send(Message::Text(format!("found {hash_to_crack} {word}")))
                 .unwrap_or_else(|err| {
                     error!("Can't send message via mpsc_websocket_tx: {err}");
                 });
@@ -261,4 +278,18 @@ async fn crack_hash(
 
     warn!("No corresponding hash has been found in the provided range");
     tx
+}
+
+pub struct DumbFuture {}
+
+impl std::future::Future for DumbFuture {
+    type Output = ();
+
+    fn poll(
+        self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        info!("Hello from a dumb future!");
+        std::task::Poll::Ready(())
+    }
 }
