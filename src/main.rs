@@ -13,7 +13,7 @@ use axum::{
     http::header,
     response::{Html, IntoResponse, Response},
     routing::get,
-    AddExtensionLayer, Router,
+    Router,
 };
 use clap::Parser;
 use futures::{sink::SinkExt, stream::StreamExt};
@@ -83,7 +83,7 @@ async fn main() {
         .route("/", get(index))
         .route("/css", get(css))
         .route("/ws", get(websocket_handler))
-        .layer(AddExtensionLayer::new(app_state));
+        .layer(Extension(app_state));
 
     tracing::info!("Listening on {addr}");
     axum::Server::bind(&addr)
