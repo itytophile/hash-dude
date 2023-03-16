@@ -40,7 +40,7 @@ pub(crate) async fn master_to_slave_relay_task(
                     } else {
                         remainder
                     };
-                let slave_end = slave_begin + gap + if slave_pos < remainder { 1 } else { 0 };
+                let slave_end = slave_begin + gap + usize::from(slave_pos < remainder);
                 format!(
                     "search {} {} {}",
                     hash,
